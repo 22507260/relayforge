@@ -22,6 +22,7 @@ import {
   retryDelayMs,
   signPayload,
   verifySignature,
+  WORKER_HEARTBEAT_TTL_MS,
 } from "./domain.ts";
 import type { SqlDatabase, SqlStatement } from "./sql.ts";
 
@@ -427,7 +428,7 @@ export class RelayService {
     return this.snapshot();
   }
 
-  /** No daemon: explicit calls claim at most 12 due deliveries using DB leases. */
+  /** API calls and the standalone worker claim at most 12 due deliveries per owner. */
   async pump(): Promise<void> {
     const workspace = await this.workspace();
     if (!workspace || workspace.queue_paused) return;
@@ -707,6 +708,7 @@ export class RelayService {
 
   async snapshot(): Promise<Snapshot> {
     const workspace = await this.workspace();
+    const now = this.clock();
     const [
       endpointRows,
       deliveryRows,
@@ -715,6 +717,7 @@ export class RelayService {
       latency,
       effects,
       buckets,
+      worker,
     ] = await Promise.all([
       this.stmt(
         `SELECT e.*, COUNT(d.id) AS deliveries, SUM(CASE WHEN d.status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
@@ -761,8 +764,14 @@ export class RelayService {
         this.owner,
         this.clock() - 600_000,
       ).all<{ minute: number; delivered: number; failed: number }>(),
+      this.stmt(
+        "SELECT SUM(last_seen_at > ?) AS active_workers, MAX(last_seen_at) AS last_heartbeat_at FROM worker_heartbeats",
+        now - WORKER_HEARTBEAT_TTL_MS,
+      ).first<{
+        active_workers: number | null;
+        last_heartbeat_at: number | null;
+      }>(),
     ]);
-    const now = this.clock();
     const delivered = summary?.delivered ?? 0;
     const total = summary?.total ?? 0;
     const chart = Array.from({ length: 10 }, (_, index) => {
@@ -809,7 +818,11 @@ export class RelayService {
       chart,
       system: {
         queuePaused: Boolean(workspace?.queue_paused),
-        processor: "request-driven",
+        processor: worker?.active_workers ? "worker" : "request-driven",
+        worker: {
+          activeWorkers: worker?.active_workers ?? 0,
+          lastHeartbeatAt: worker?.last_heartbeat_at ?? null,
+        },
         maxAttempts: MAX_ATTEMPTS,
         eventLimit: EVENT_LIMIT,
         snapshotLimit: SNAPSHOT_LIMIT,

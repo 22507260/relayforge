@@ -1,6 +1,6 @@
 # Architecture
 
-RelayForge makes webhook recovery visible through a full stack application. The first version is a persistent, request-driven reliability lab. It is designed for an inspectable demo and engineering discussion.
+RelayForge makes webhook recovery visible through a full stack application. Its persistent queue can be processed by a standalone worker, with dashboard requests as a fallback. It is designed for an inspectable demo and engineering discussion.
 
 ## Data flow
 
@@ -9,7 +9,9 @@ flowchart LR
     Browser[React dashboard] -->|Snapshot and delivery detail| API[Next.js API]
     Browser -->|Validated actions| API
     API -->|Tenant-scoped reads and writes| DB[(SQLite)]
-    API -->|Pump action| Processor[Delivery processor]
+    API -->|Request fallback| Processor[Delivery processor]
+    Worker[Standalone Node.js worker] -->|Process due work| Processor
+    Worker -->|Persist heartbeat| DB
     Processor -->|Claim due work with a lease| DB
     Processor -->|Signed envelope, in process| Receiver[Controlled receiver]
     Receiver -->|Deduplicated demo effect| DB
@@ -18,7 +20,7 @@ flowchart LR
     API -->|Persisted observations| Browser
 ```
 
-These are logical boundaries within one application. The processor calls `RelayService.receive()` directly; it does not send outbound HTTP requests. A signed HTTP receiver route reuses the same logic. This structure exercises signature verification and delivery state without claiming independent services or actual external delivery.
+These are logical boundaries sharing one database and delivery implementation. The web application and worker run in separate processes. In either process, the processor calls `RelayService.receive()` directly; it does not send outbound HTTP requests. A signed HTTP receiver route reuses the same logic. This structure exercises signature verification and delivery state without claiming actual external delivery.
 
 ## HTTP and shared contracts
 
@@ -39,7 +41,7 @@ The `/login` page supports account creation and sign-in. The server validates em
 
 Passwords use salted scrypt hashing. Sessions contain a random opaque token; only its SHA-256 hash is stored in the database. The session expires after seven days. Its cookie is HttpOnly and SameSite=Lax, with Secure enabled in production. Sign-out revokes the stored session. Authentication attempts are bounded by persistent ten-minute counters: ten per normalized email and 100 across the application.
 
-`lib/contracts.ts` defines `Action`, `Snapshot`, `DeliveryPage`, `DeliveryDetail`, and the visible states. The server validates incoming actions with Zod because TypeScript types do not constrain arbitrary request JSON. The snapshot includes the authenticated account's ID and email, describes its processor as `request-driven`, and exposes the retry cap, workspace event limit, and snapshot limit. Signing secrets, password hashes, and session tokens are excluded.
+`lib/contracts.ts` defines `Action`, `Snapshot`, `DeliveryPage`, `DeliveryDetail`, and the visible states. The server validates incoming actions with Zod because TypeScript types do not constrain arbitrary request JSON. The snapshot includes the authenticated account's ID and email, describes the observed processor mode using the worker heartbeat, and exposes the retry cap, workspace event limit, and snapshot limit. Signing secrets, password hashes, and session tokens are excluded.
 
 The delivery-history endpoint accepts `page` (1–500, default 1), `pageSize` (1–50, default 20), `search` (up to 100 characters), `status` (`all`, `pending`, `retrying`, `delivered`, or `dead`), and `endpointId` (`all` or an endpoint ID). Unknown or duplicated parameters and invalid values return `400`. Search matches literal text in event IDs, event types, and endpoint names; `%` and `_` have no wildcard meaning. All query conditions remain scoped to the authenticated account.
 
@@ -70,7 +72,15 @@ stateDiagram-v2
 
 Leasing is separate from visible status. A leased delivery can be pending or retrying. Attempt numbers represent the current replay cycle; retained history can contain the same number from earlier cycles. No replay-cycle identifier is modeled yet.
 
-`send`, `demo`, and `replay` run a pump immediately. Later retries depend on explicit pump requests from the dashboard. A snapshot read never advances processing. Pause preserves queued data and blocks new claims; it does not cancel work already claimed.
+The standalone worker checks persisted due work independently of HTTP requests and invokes the same tenant-scoped processor as the API. When no recent worker heartbeat is observed, the dashboard continues requesting pump actions as a fallback. A snapshot read never advances processing. Pause preserves queued data and blocks new claims in either process; it does not cancel work already claimed.
+
+## Standalone worker
+
+`npm run worker` starts a Node.js 24 process using the application's native SQLite adapter, committed migrations, receiver behavior, and lease rules. Run it from the project directory with the same `DATABASE_PATH` as the web application. It does not need a browser, HTTP listener, or account session: local access to the database is the worker's authority. Its processing remains scoped to each stored workspace, and the HTTP APIs continue deriving user identity from authenticated sessions.
+
+`lib/server/worker.ts` owns processing passes and lifecycle handling; `scripts/worker.mjs` loads local environment configuration and starts the process. The worker writes its instance UUID, start time, and last observation time to the `worker_heartbeats` table. Snapshots expose `system.worker.activeWorkers` and `lastHeartbeatAt`, with processor mode `worker` or `request-driven`. An observation older than ten seconds is stale, so the dashboard switches to request-driven fallback. A recent heartbeat establishes that the worker wrote to this database recently. It does not prove that all queued work is progressing, the next retry will start at an exact time, or the receiver is healthy. Multiple processors still rely on conditional leases and completion tokens, rather than the heartbeat, for claim protection.
+
+SIGINT and SIGTERM stop scheduling new passes and wait for an ongoing pump before the database closes. Forced process termination may leave a lease and unfinished attempt; a later worker or request pump recovers the expired lease. Run the web application and worker as separately supervised processes when deploying. Their storage and migrations must remain available, and their relative database paths must resolve to the same file.
 
 ## Policy and demo receivers
 
@@ -105,10 +115,10 @@ An external receiver would need to atomically commit its deduplication record an
 | --------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------- |
 | Same key is submitted again       | Return the accepted event and track the duplicate                  | Different payload or type is a conflict              |
 | Two pumps target the same event   | Conditional update permits only one active lease claim             | Real concurrency deserves database integration tests |
-| Processor stops before completion | Later pumping marks the interrupted attempt and recovers the lease | Recovery waits for another request                   |
+| Processor stops before completion | Later pumping marks the interrupted attempt and recovers the lease | Recovery needs a later worker pass or request pump   |
 | Stale processor tries to finish   | Completion requires its lease token                                | A lease does not stop all repeated receiver calls    |
 | All automatic attempts fail       | Dead state exposes the event for inspection and replay             | Recovery is an operator decision                     |
-| Dashboard is closed               | Stored queue state remains                                         | No autonomous scheduler is present                   |
+| Dashboard is closed               | Stored queue state remains; a running worker can process due work  | Without a worker, progress waits for request pumping |
 
 Persistence and autonomous execution are separate properties. Leases reduce overlapping work; they do not make network delivery exactly once.
 
@@ -121,6 +131,7 @@ Persistence and autonomous execution are separate properties. Leases reduce over
 - **Destination restriction:** sends target built-in receiver IDs. No arbitrary user URL is fetched.
 - **Signing:** HMAC-SHA256 covers `timestamp + "." + raw body`, with a five-minute timestamp window and server-owned signing secrets. Web Crypto verifies the signature.
 - **Data access:** detail reads, replay, receiver changes, and snapshots use ownership checks. An opaque ID is not authorization.
+- **Worker authority:** the local worker has direct database access and can process stored workspaces. Keep its database access and process configuration restricted; browser clients cannot select its ownership context.
 
 Signing secrets are persisted in the demo database and are excluded from API responses. Secret encryption, rotation, and revocation are future work. HMAC does not replace tenant authorization, TLS, or effect deduplication.
 
@@ -132,4 +143,4 @@ The native SQLite adapter uses write-ahead logging, foreign-key enforcement, a f
 
 The dashboard exposes attempts, duration, next retry time, activity, queue pause state, and aggregate delivery counts. Success rate uses current delivered events divided by total events. Average duration includes finished attempts with recorded status codes; it is not external network latency. The chart groups attempt outcomes by UTC minute over the recent ten-minute window. Snapshot reads return the latest 100 deliveries and 30 activity entries. The separate history endpoint can page and filter across all accepted events within the 500-event workspace limit.
 
-This MVP does not claim unlimited scale. [The roadmap](ROADMAP.md) lists autonomous scheduling, a Postgres adapter, real integration coverage, and the evidence required before making stronger claims.
+This MVP does not claim unlimited scale. [The roadmap](ROADMAP.md) separates the standalone worker from further operational evidence, a Postgres adapter, and external delivery integration.

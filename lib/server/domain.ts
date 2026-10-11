@@ -2,6 +2,7 @@ export const MAX_ATTEMPTS = 4;
 export const LEASE_MS = 15_000;
 export const MAX_BODY_BYTES = 16_384;
 export const RECEIVER_TIMEOUT_MS = 250;
+export const WORKER_HEARTBEAT_TTL_MS = 10_000;
 export class ApiError extends Error {
   status: number;
 

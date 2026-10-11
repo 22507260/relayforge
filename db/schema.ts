@@ -33,6 +33,16 @@ export const authRateLimits = sqliteTable("auth_rate_limits", {
   attempts: integer("attempts").notNull(),
 });
 
+export const workerHeartbeats = sqliteTable(
+  "worker_heartbeats",
+  {
+    id: text("id").primaryKey(),
+    startedAt: integer("started_at").notNull(),
+    lastSeenAt: integer("last_seen_at").notNull(),
+  },
+  (table) => [index("worker_heartbeats_seen_idx").on(table.lastSeenAt)],
+);
+
 export const workspaces = sqliteTable("workspaces", {
   owner: text("owner").primaryKey(),
   signingSecret: text("signing_secret").notNull(),

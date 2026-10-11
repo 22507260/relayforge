@@ -1,29 +1,44 @@
 # Validation record
 
-Recorded on **2026-10-10** for RelayForge's standalone Next.js runtime on Node.js 24, with application-owned accounts and sessions and a persistent SQLite database. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
+Updated on **2026-10-11** for RelayForge's standalone Next.js runtime and worker on Node.js 24, with application-owned accounts and sessions and a persistent SQLite database. Earlier UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
 
-The checks below cover the final dashboard, application accounts, and paginated delivery-history API. Automated verification was rerun after the last UI repairs and text edits.
+The current checks cover the dashboard, application accounts, paginated delivery-history API, and standalone worker. Automated verification was rerun after the worker lifecycle repair.
 
 ## Automated checks
 
-| Check                                     | Current standalone-runtime result                                                              |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `npm run typecheck`                       | Passed on the final implementation                                                             |
-| `npm test`                                | 23 tests passed, 0 failed, using the production SQLite adapter                                 |
-| `npm run db:migrate`                      | Passed                                                                                         |
-| `npm run build`                           | Final standard Next.js production build passed, including the delivery-history route           |
-| `npm run lint`                            | Passed with 0 warnings                                                                         |
-| `npm run smoke`                           | Passed against development and the final compiled production server, including the history API |
-| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                               |
-| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                      |
+| Check                                     | Current standalone-runtime result                                                                                |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                       | Passed on the final implementation                                                                               |
+| `npm test`                                | 29 tests passed, 0 failed, including six worker runtime checks with the production SQLite adapter                |
+| `npm run db:migrate`                      | Passed                                                                                                           |
+| `npm run build`                           | Final standard Next.js production build passed, including the delivery-history route                             |
+| `npm run lint`                            | Passed with 0 warnings                                                                                           |
+| `npm run smoke`                           | Passed against the final compiled production server with the standalone worker active, including the history API |
+| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                                                 |
+| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                                        |
 
 The test suite uses the same SQLite adapter as the application. It covers password hashing, credential validation, session expiry and revocation, authentication limits, payload identity, signatures, retry bounds, request validation, tenant isolation, competing SQLite connections, expired leases, stale completion, replay, receiver effect deduplication, and controlled timeout behavior.
 
 The history checks cover strict query bounds, stable pagination across 125 records, search beyond the latest-100 snapshot, literal search characters, and account isolation. Attempt metadata checks cover replay with equal timestamps and interrupted attempts without a measured HTTP duration. Endpoint duration remains available when its measured attempt falls outside the snapshot window. These tests do not reproduce a distributed production deployment.
 
+## Worker runtime checks — 2026-10-11
+
+Six tests cover the standalone worker using isolated native SQLite databases:
+
+| Check                                       | Observed result                                                                                                                                                                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Processing without HTTP or browser pumps    | A child process completed a flaky delivery with `503`, `503`, then `200`. A paused workspace retained zero attempts and progressed after its persisted pause state was cleared.                                                 |
+| Heartbeat expiry and per-instance shutdown  | Two observed workers were counted independently. Stopping one preserved the other's heartbeat; advancing beyond the ten-second freshness window returned request-driven mode. Replacement processing cleaned stale rows.        |
+| Competing processes and an API pump         | Two standalone processes and a request pump processed 36 healthy events with one recorded attempt and one receiver business effect per event.                                                                                   |
+| Forced process termination and restart      | A child was terminated with `SIGKILL` after a recorded claim. Its replacement waited for the actual 15-second lease to expire, without editing timestamps, recorded the interrupted attempt, and delivered on the next attempt. |
+| Graceful abort and exhausted-lease recovery | Aborting the worker loop waited for an active controlled timeout attempt to finish and removed its heartbeat. A replacement recovered an expired final-budget claim into dead state.                                            |
+| Idempotent stop before database closure     | Stopping an idle run loop, closing its database, and awaiting the loop completed without a second cleanup query against the closed handle.                                                                                      |
+
+The child-process checks ran on Windows. Graceful shutdown is exercised through the worker loop's abort signal; this does not claim that native operating-system signal delivery was tested on every platform. Receivers remain controlled in-process adapters. The checks do not establish external delivery, supervised deployment, throughput, or high availability.
+
 ## HTTP smoke check
 
-The smoke check passed against development and against the compiled application started with `npm start` on port 3000. It uses a loopback URL and its own test account.
+On **2026-10-11**, the smoke check passed against the compiled application started with `npm start` on port 3000 while the standalone worker was active. Development and production smoke checks also passed during the previous UI validation on 2026-10-10. Each run uses a loopback URL and its own test account.
 
 | Request or behavior                                     | Observed result                                               |
 | ------------------------------------------------------- | ------------------------------------------------------------- |
@@ -42,9 +57,19 @@ The smoke check passed against development and against the compiled application 
 
 This sends real HTTP requests to the local API. The delivery processor still calls its controlled receiver in-process. Passing the check does not establish external webhook delivery or behavior under network acknowledgement loss.
 
-## Browser verification
+## Worker browser verification — 2026-10-11
 
-The current account flow, dashboard, and history controls were checked in the browser:
+The final compiled production application was checked with the worker stopped and restarted:
+
+- With no fresh worker heartbeat, the header showed Browser fallback and the sidebar showed Worker offline · browser fallback. The tooltip described the stale heartbeat, and the interface explained visible-page processing every three seconds.
+- After the worker started, a subsequent live snapshot showed Worker online, the sidebar showed Worker heartbeat just now, and Engineering showed Background worker connected.
+- The workspace retained 37 accepted events, 30 delivered and seven dead, through the process changes.
+
+[Worker dashboard screenshot](worker-preview.jpg) shows the current interface. These observations check status transitions and persisted state; the no-browser processing and crash recovery evidence comes from the runtime tests above.
+
+## Earlier browser verification — 2026-10-10
+
+The account flow, dashboard, and history controls were checked in the browser before the worker addition:
 
 - Signing in again restored persisted demo records; a workspace with 24 demo events remained available.
 - Reloading the final production build restored 25 accepted events: 18 delivered and seven dead.
@@ -71,6 +96,6 @@ These are targeted interaction checks, not a complete accessibility or browser c
 
 ## Reproduce
 
-Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep `npm run dev` running and execute `npm run smoke` in a second terminal. Use the dashboard to inspect retries, repair a receiver, replay an event, and reload.
+Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep `npm run dev` running, start `npm run worker` in a second terminal with the same `DATABASE_PATH`, and execute `npm run smoke` in another terminal. Use the dashboard to inspect retries, repair a receiver, replay an event, and reload. Stop and restart the worker to inspect the observed processing mode. `npm test` includes the isolated child-process and worker lifecycle checks.
 
 No throughput, external network latency, or availability benchmark is claimed. Dependency audit results are time-specific; rerun them when the dependency tree changes.

@@ -4,13 +4,13 @@
 
 Send an event, make a receiver fail, inspect every attempt, and replay a delivery after recovery. RelayForge combines an animated operations dashboard with a persistent queue, idempotency, signed payloads, and explicit failure states.
 
-This is a working portfolio MVP. Its receivers are controlled demonstrations, and its queue advances through requests while the dashboard is open. It makes reliability behavior inspectable without claiming to be a production delivery service.
+This is a working portfolio MVP. Its receivers are controlled demonstrations. A standalone worker advances the persistent queue without a browser; dashboard requests provide a fallback when no recent worker heartbeat is observed. It makes reliability behavior inspectable without claiming to be a production delivery service.
 
 [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Interview guide](docs/INTERVIEW-GUIDE.md) · [Security](docs/SECURITY.md) · [Roadmap](docs/ROADMAP.md)
 
 ![RelayForge dashboard with persisted events, attempt metrics, and controlled receivers](docs/preview.jpg)
 
-[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg)
+[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg)
 
 ## Try the failure path
 
@@ -26,7 +26,7 @@ The project gives you concrete questions to investigate: what happens when two p
 
 | Concern               | Implemented approach                                                                 | Boundary                                                                    |
 | --------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Durable state         | SQLite stores deliveries and attempts                                                | Processing requires requests; there is no autonomous daemon                 |
+| Durable state         | SQLite stores deliveries and attempts; a standalone worker processes due work        | Autonomous progress requires a running worker with access to the database   |
 | Duplicate submissions | A unique key scoped to tenant and endpoint identifies an accepted event              | A reused key with a different payload or event type returns `409`           |
 | Competing processors  | Atomic lease claims and token-checked completion                                     | An expired lease can lead to another attempt                                |
 | Recovery              | Four automatic attempts, backoff with jitter, dead state, and manual replay          | Receiver recovery is not guaranteed                                         |
@@ -59,6 +59,16 @@ npm run dev
 
 Open `http://localhost:3000`, create an account, and sign in. Registration signs you in immediately. Passwords must contain 12–128 characters. The application owns its email/password authentication and session handling. Each account has an isolated workspace.
 
+Start autonomous processing in a second terminal from the same project directory:
+
+```sh
+npm run worker
+```
+
+The worker uses Node.js 24 and the same `DATABASE_PATH` as the web application. With the worker running, scheduled retries can progress after every browser is closed. Without it, the dashboard pumps due work while open. Pause still prevents new claims. The dashboard uses a persisted heartbeat to distinguish a recently observed worker from the request fallback; a heartbeat older than ten seconds is considered stale. This is a liveness observation, not a promise that a particular delivery will succeed.
+
+Stop the worker with Ctrl+C. Its signal handler stops scheduling new passes and waits for an ongoing pump before closing the database. A forced termination can interrupt an attempt; the existing lease recovery and completion fencing handle subsequent processing.
+
 Development uses Next.js's webpack mode after repeated reloads were observed in the Windows checkout during local verification. Production uses the standard `next build` command.
 
 The migration command applies the committed SQLite migrations. The database defaults to `.data/relayforge.sqlite`; set `DATABASE_PATH` to change its location. The application also applies pending migrations when the database opens. Keep the database on writable, persistent storage when deploying so account and delivery history survive restarts.
@@ -72,6 +82,8 @@ npm start
 
 Deploy to a Node.js environment with persistent disk storage and HTTPS. The project does not require a particular hosting provider or an external identity account.
 
+Run `npm run worker` as a separately supervised process alongside `npm start`. Both processes must use the same database file and have access to the committed migrations; using the same working directory keeps relative paths consistent. A web server by itself does not start the autonomous worker. The worker processes the built-in receivers in-process and does not send outbound webhook requests.
+
 ## Verify the work
 
 ```sh
@@ -81,7 +93,7 @@ npm test
 npm run build
 ```
 
-CI runs these commands and a production dependency audit after a clean dependency install. The [validation record](docs/VALIDATION.md) contains the dated check results and known full-audit findings. For behavior beyond unit tests, run the demo, observe scheduled retries, replay after receiver recovery, and refresh to confirm that delivery history persists. Closing the tab preserves records but stops dashboard-driven processing.
+CI runs these commands and a production dependency audit after a clean dependency install. The [validation record](docs/VALIDATION.md) contains the dated check results and known full-audit findings. For behavior beyond unit tests, run the demo, observe scheduled retries, replay after receiver recovery, and refresh to confirm that delivery history persists. To inspect autonomous processing, start the worker, enqueue a flaky delivery, close all dashboard tabs, and reopen the application after its retries. Closing the tab stops dashboard-driven processing; a running worker can continue it.
 
 With the development server running, use a second terminal for the real HTTP smoke check:
 
@@ -102,6 +114,8 @@ No throughput, availability, or latency benchmark is claimed. Dashboard duration
 | `lib/server/auth.ts`     | Credential validation, password hashing, session lifecycle, and authentication limits |
 | `lib/server/database.ts` | Native SQLite adapter, transactional batches, and migration tracking                  |
 | `lib/server/service.ts`  | Acceptance, leases, processing, receiver effects, and snapshots                       |
+| `lib/server/worker.ts`   | Autonomous queue passes, worker heartbeat, and graceful shutdown                      |
+| `scripts/worker.mjs`     | Node.js worker entry point and local environment loading                              |
 | `lib/server/domain.ts`   | Retry policy, canonical JSON, hashing, and signatures                                 |
 | `lib/server/http.ts`     | Runtime validation, request bounds, and API errors                                    |
 | `db/` and `drizzle/`     | Database schema and committed migrations                                              |

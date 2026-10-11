@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RelayForge — Every event. Delivered with confidence.",
+  title: "RelayForge — Webhook reliability lab",
   description:
     "A live webhook reliability sandbox with signed delivery, durable event state, automatic retries, and complete visibility.",
   icons: {

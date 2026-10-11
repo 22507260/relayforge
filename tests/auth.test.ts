@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -114,11 +114,14 @@ test("authentication throttling persists across connections and expires after it
   now += 10 * 60 * 1000;
   const session = await authOtherConnection.login(alice);
   assert.equal(session.user.email, alice.email);
-  assert.equal(
+  assert.deepEqual(
     second.connection
-      .prepare("SELECT count(*) AS count FROM relayforge_migrations")
-      .get()!.count,
-    2,
+      .prepare("SELECT name FROM relayforge_migrations ORDER BY name")
+      .all()
+      .map((row) => row.name),
+    readdirSync(join(process.cwd(), "drizzle"))
+      .filter((name) => name.endsWith(".sql"))
+      .sort(),
   );
   const rateRows = second.connection
     .prepare("SELECT count(*) AS count FROM auth_rate_limits")

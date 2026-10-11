@@ -1,10 +1,10 @@
 # Roadmap
 
-The current version is a working portfolio MVP: a persistent request-driven queue, a dashboard, and controlled receivers. These milestones are proposed work, not completed features or delivery dates.
+The current version is a working portfolio MVP: a persistent queue, a standalone worker, a dashboard with request fallback, and controlled receivers. The first milestone describes the worker addition and its verification boundary. Later milestones are proposed work, not completed features or delivery dates.
 
 ## Current limitations
 
-- Queue progress depends on pump requests. Persistent state does not provide autonomous processing.
+- Autonomous progress depends on a running worker with access to the same SQLite file as the web application. Without a recent worker heartbeat, the dashboard falls back to pump requests. A heartbeat is an observation of liveness, not a delivery or availability guarantee.
 - The processor invokes a controlled receiver in-process. It does not deliver to external systems or reproduce network acknowledgement loss.
 - Only built-in receiver destinations are supported.
 - The application manages accounts and sessions. Email verification, password recovery, and public-deployment abuse controls remain future work.
@@ -15,13 +15,15 @@ The current version is a working portfolio MVP: a persistent request-driven queu
 - There is no published load benchmark, SLA, billing system, or production incident record.
 - No exactly-once network delivery guarantee is made.
 
-## 1. Autonomous processing
+## 1. Autonomous processing — implementation and verification
 
-Separate processing from the dashboard with a scheduled job, durable queue consumer, or standalone daemon suited to the deployment environment. Keep the API and UI useful when no browser is open.
+A standalone Node.js worker separates queue progress from the dashboard. It uses the same native SQLite adapter and lease-fenced processor as the API, writes a persisted heartbeat, and waits for an ongoing pump on graceful shutdown. The UI can distinguish recent worker observations from request-driven fallback. The worker still invokes controlled receivers in-process.
 
-**Acceptance criteria:** enqueue work and close every browser; verify delivery continues. Terminate a processor after claim and verify recovery after lease expiry. Race processors against the same event and confirm database claim protection. Capture these experiments in repeatable integration tests.
+**Verification status — 2026-10-11:** implemented and checked. The full suite passed 29 tests, including six worker runtime checks covering processing without HTTP/browser pumps, pause, heartbeat expiry, competing processes, actual process termination and 15-second lease recovery, graceful abort, final-budget recovery, and idempotent shutdown before database closure. The compiled dashboard showed browser fallback while the worker was offline and worker mode after restart. See the [validation record](VALIDATION.md) for the exact evidence and limits.
 
-Resolve scheduling before adding infrastructure solely for appearance.
+The runtime checks use native SQLite and actual child processes for autonomous execution, competing claims, and forced termination. Graceful lifecycle checks use the loop's abort signal. This demonstrates the local worker boundary; deployment supervision, platform-wide signal behavior, and production operational properties need separate evidence.
+
+Further work includes supervised deployment, alerts, recovery drills, and measured behavior under representative load. Starting a local worker does not establish those operational properties.
 
 ## 2. Database adapter and Postgres evaluation
 

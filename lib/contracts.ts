@@ -93,7 +93,11 @@ export interface Snapshot {
   chart: { label: string; delivered: number; failed: number }[];
   system: {
     queuePaused: boolean;
-    processor: "request-driven";
+    processor: "worker" | "request-driven";
+    worker: {
+      activeWorkers: number;
+      lastHeartbeatAt: number | null;
+    };
     maxAttempts: number;
     eventLimit: number;
     snapshotLimit: number;

@@ -12,8 +12,11 @@ RelayForge is a controlled reliability lab. Its safeguards are scoped to this ap
 - Receiver envelopes require a timestamped HMAC signature. Signing keys stay in server-side storage and are excluded from API responses.
 - Immutable events, database uniqueness constraints, lease tokens, and receiver effect deduplication protect distinct parts of the delivery lifecycle.
 - Only built-in destinations are accepted. The delivery processor does not fetch arbitrary URLs.
+- The standalone worker uses the same ownership-scoped processor, conditional claims, and completion tokens as request pumping. Its heartbeat informs the dashboard's observed processing mode; it does not grant authorization or replace lease protection.
 
 Deploy behind HTTPS and keep `DATABASE_PATH` on persistent storage. Treat the SQLite file and backups as sensitive: they contain account information, password hashes, sessions, signing keys, and delivery payloads. Never publish the local database or real credentials in the repository.
+
+The worker is a trusted local process with direct database access; it does not authenticate through a browser session. Run it under a restricted operating-system account with the required storage permissions, using the same database as the web process. Supervise it independently of the web server. Graceful shutdown waits for an ongoing pump, while forced termination relies on lease expiry and a subsequent processing pass for recovery. A recent heartbeat indicates a recent database write, not proven queue health or availability.
 
 ## Dependency verification
 
@@ -30,4 +33,4 @@ Review suggested dependency changes before applying them. A forced fix can intro
 
 ## Current limits
 
-Email verification, password recovery, signing-key encryption and rotation, distributed abuse controls, external destination validation, and autonomous scheduling remain future work. Review these boundaries before offering accounts to the public. See [the architecture](ARCHITECTURE.md) for the implemented trust model and [the roadmap](ROADMAP.md) for bounded next steps.
+Email verification, password recovery, signing-key encryption and rotation, distributed abuse controls, external destination validation, and reviewed worker operations remain future work. The local worker provides autonomous processing for controlled receivers, but does not establish production monitoring, high availability, or external delivery. Review these boundaries before offering accounts to the public. See [the architecture](ARCHITECTURE.md) for the implemented trust model and [the roadmap](ROADMAP.md) for bounded next steps.

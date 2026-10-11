@@ -166,6 +166,19 @@ function ModeBadge({ mode }: { mode: ReceiverMode }) {
   );
 }
 
+function processorStatus(system: Snapshot["system"]) {
+  const online = system.processor === "worker";
+  const lastHeartbeatAt = system.worker?.lastHeartbeatAt ?? null;
+  const heartbeat =
+    lastHeartbeatAt === null
+      ? "No worker heartbeat recorded"
+      : `Heartbeat ${relativeTime(lastHeartbeatAt, system.now).toLowerCase()}`;
+  const description = online
+    ? `${heartbeat}. Background delivery runs independently of this page.`
+    : `${lastHeartbeatAt === null ? "No fresh worker heartbeat is available." : "The last worker heartbeat is stale."} The visible page requests delivery processing every 3 seconds.`;
+  return { online, lastHeartbeatAt, heartbeat, description };
+}
+
 function PageHeader({
   eyebrow,
   title,
@@ -702,6 +715,7 @@ function Overview({
   select: (id: string) => void;
 }) {
   const metrics = snapshot.metrics;
+  const processor = processorStatus(snapshot.system);
   const healthy = snapshot.endpoints.filter(
     (endpoint) => endpoint.mode === "healthy",
   ).length;
@@ -759,7 +773,11 @@ function Overview({
           {
             title: "Queued events",
             value: formatNumber(metrics.queued),
-            tag: snapshot.system.queuePaused ? "Paused" : "Processing",
+            tag: snapshot.system.queuePaused
+              ? "Paused"
+              : processor.online
+                ? "Background processing"
+                : "Browser fallback",
             tone: "blue",
             icon: Clock3,
             foot: "Pending and retrying deliveries",
@@ -823,7 +841,9 @@ function Overview({
               <Radio size={13} />
               {snapshot.system.queuePaused
                 ? "Queue paused"
-                : "Refreshes every 3 seconds while visible"}
+                : processor.online
+                  ? "Background worker · live snapshots"
+                  : "Browser fallback · every 3 seconds"}
             </span>
             <span>UTC</span>
           </div>
@@ -909,7 +929,11 @@ function Overview({
           </span>
           <span>
             <i className="live-dot" />
-            {snapshot.system.queuePaused ? "Engine paused" : "Engine ready"}
+            {snapshot.system.queuePaused
+              ? "Engine paused"
+              : processor.online
+                ? "Background worker online"
+                : "Browser-driven fallback"}
           </span>
         </div>
       </section>
@@ -1177,6 +1201,7 @@ function Engineering({
   snapshot: Snapshot;
   copy: (value: string) => void;
 }) {
+  const processor = processorStatus(snapshot.system);
   const endpointId =
     snapshot.endpoints.find((endpoint) => endpoint.mode === "healthy")?.id ||
     snapshot.endpoints[0]?.id;
@@ -1203,7 +1228,9 @@ function Engineering({
           title="Event delivery lifecycle"
           description="From validated acceptance to a verified response"
         >
-          <span className="subtle-badge">Request-driven processor</span>
+          <span className="subtle-badge" title={processor.description}>
+            {processor.online ? "Background worker" : "Browser-driven fallback"}
+          </span>
         </PanelHeading>
         <div className="architecture-flow">
           {[
@@ -1336,12 +1363,32 @@ function Engineering({
       <div className="sandbox-note">
         <CircleHelp size={21} />
         <div>
-          <strong>This is a request-driven sandbox.</strong>
+          <strong>
+            {processor.online
+              ? "Background worker connected."
+              : "Browser-driven fallback is active."}
+          </strong>
           <p>
-            The visible page requests processing every 3 seconds. There is no
-            continuous background worker. Production operation requires a
-            scheduled worker or queue consumer, external receiver transport, and
-            an operational retention policy.
+            {processor.online ? (
+              <>
+                {processor.heartbeat}. A heartbeat within 10 seconds confirms a
+                worker was observed. Eligible deliveries can continue when this
+                page is closed; the dashboard fetches a snapshot every 3 seconds
+                while visible.
+                {snapshot.system.queuePaused &&
+                  " The queue is currently paused, so the worker waits for it to resume."}
+              </>
+            ) : (
+              <>
+                No fresh worker heartbeat is available. {processor.heartbeat}.
+                While visible, this page requests delivery processing every 3
+                seconds. A worker restores background processing once its
+                heartbeat is observed within 10 seconds.
+              </>
+            )}{" "}
+            Receivers remain local sandbox adapters. External receiver transport
+            and an operational retention policy are separate deployment
+            concerns.
           </p>
         </div>
       </div>
@@ -1434,7 +1481,9 @@ export default function Home() {
       if (pumping.current || acting.current) return;
       pumping.current = true;
       const job = queue.current.then(() =>
-        api<Snapshot>("/api/action", { type }),
+        type === "pump" && snapshotRef.current?.system.processor === "worker"
+          ? api<Snapshot>("/api/snapshot")
+          : api<Snapshot>("/api/action", { type }),
       );
       queue.current = job.catch(() => undefined);
       try {
@@ -1674,6 +1723,7 @@ export default function Home() {
   const email = snapshot?.user?.email || "";
   const accountLabel = email ? email.split("@")[0] : "Your account";
   const initials = accountLabel.slice(0, 2).toUpperCase();
+  const processor = snapshot ? processorStatus(snapshot.system) : null;
   const pageRows = deliveryPage?.deliveries || [];
   const initialEmpty =
     view === "Deliveries" &&
@@ -1777,7 +1827,15 @@ export default function Home() {
                   }}
                 />
               </div>
-              <p>Persisted in your workspace</p>
+              <p title={processor?.description}>
+                {connectionError
+                  ? "Connection interrupted"
+                  : processor?.online
+                    ? `Worker ${processor.heartbeat.toLowerCase()}`
+                    : processor
+                      ? "Worker offline · browser fallback"
+                      : "Connecting to the engine…"}
+              </p>
               <button onClick={() => go("Engineering")}>
                 <CircleHelp size={14} />
                 Explore the architecture
@@ -1849,14 +1907,20 @@ export default function Home() {
               <kbd>/</kbd>
             </label>
             <span
-              className={`engine-indicator ${snapshot?.system.queuePaused ? "paused" : connectionError ? "disconnected" : ""}`}
+              className={`engine-indicator ${connectionError ? "disconnected" : snapshot?.system.queuePaused || (processor && !processor.online) ? "paused" : ""}`}
+              title={processor?.description}
+              role="status"
             >
               <i />
-              {snapshot?.system.queuePaused
-                ? "Queue paused"
-                : connectionError
-                  ? "Disconnected"
-                  : "Sandbox engine"}
+              {connectionError
+                ? "Disconnected"
+                : snapshot?.system.queuePaused
+                  ? "Queue paused"
+                  : processor?.online
+                    ? "Worker online"
+                    : processor
+                      ? "Browser fallback"
+                      : "Connecting"}
             </span>
             <Button
               className="new-event-button"
@@ -2166,13 +2230,15 @@ export default function Home() {
                   )}
                   <footer className="workspace-footer">
                     <span>RelayForge · Reliability sandbox</span>
-                    <span>
+                    <span title={processor?.description}>
                       <i className="live-dot" />
-                      {snapshot.system.queuePaused
-                        ? "Queue paused"
-                        : connectionError
-                          ? "Connection interrupted"
-                          : "Persisted. Signed. Recorded."}
+                      {connectionError
+                        ? "Connection interrupted"
+                        : snapshot.system.queuePaused
+                          ? "Queue paused"
+                          : processor?.online
+                            ? `Worker ${processor.heartbeat.toLowerCase()}`
+                            : "Worker offline · browser-driven fallback"}
                     </span>
                   </footer>
                 </motion.div>

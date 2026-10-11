@@ -1,0 +1,4 @@
+# Stable migration checksums across Windows and Linux checkouts.
+* text=auto eol=lf
+*.jpg binary
+*.png binary
