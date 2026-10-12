@@ -11,7 +11,7 @@ The current version is a working portfolio MVP: a persistent queue, a standalone
 - Signing secrets are stored in the demo database; encryption and rotation are not implemented.
 - Unit tests alone cannot establish production database race behavior or crash recovery.
 - Workspaces accept up to 500 events; snapshots expose the latest 100 deliveries and 30 activities. Delivery history supports pagination and server-side filtering, but retention policies and larger workspace capacity remain future work.
-- Replay history has no explicit cycle identifier; attempt numbers restart for each replay.
+- Attempts recorded before cycle tracking remain in Legacy history; their original cycle boundaries cannot be reconstructed reliably.
 - There is no published load benchmark, SLA, billing system, or production incident record.
 - No exactly-once network delivery guarantee is made.
 
@@ -41,7 +41,7 @@ Design destination registration, constrained egress, encrypted signing secrets, 
 
 ## 4. Operational policies
 
-Add a retry taxonomy, terminal failure handling, dead-letter triage, replay-cycle identity, retention, and richer history navigation. Preserve the current rejection of an idempotency key reused with different payload or type, and define how long deduplication records remain.
+Recovery now provides dead-letter triage, bounded bulk replay with cycle guards, an explicit replay history, and a persistent recovery demonstration. Remaining work includes a retry taxonomy, terminal failure handling, retention, and richer audit navigation. Preserve the current rejection of an idempotency key reused with different payload or type, and define how long deduplication records remain.
 
 **Acceptance criteria:** operator actions are audited; replay history is unambiguous; retention is tested; metrics distinguish events, attempts, acknowledgements, and effects; terminal failures do not consume unnecessary retries.
 

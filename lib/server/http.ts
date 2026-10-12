@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { ApiError, MAX_BODY_BYTES } from "./domain.ts";
-import type { Action, DeliveryQuery } from "../contracts.ts";
+import type {
+  Action,
+  DeliveryQuery,
+  ReplayBatchRequest,
+} from "../contracts.ts";
 
 const object = z.record(z.unknown());
 const identifier = z
@@ -8,6 +12,7 @@ const identifier = z
   .min(1)
   .max(100)
   .regex(/^[a-zA-Z0-9_-]+$/);
+const cycle = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("initialize") }).strict(),
   z
@@ -31,10 +36,49 @@ const actionSchema = z.discriminatedUnion("type", [
       mode: z.enum(["healthy", "flaky", "failing", "timeout"]),
     })
     .strict(),
-  z.object({ type: z.literal("replay"), eventId: identifier }).strict(),
+  z
+    .object({
+      type: z.literal("replay"),
+      eventId: identifier,
+      expectedCycle: cycle.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("start-recovery-demo"),
+      previousEventId: identifier.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("repair-recovery-demo"),
+      eventId: identifier,
+      expectedCycle: cycle,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("replay-recovery-demo"),
+      eventId: identifier,
+      expectedCycle: cycle,
+    })
+    .strict(),
   z.object({ type: z.literal("pause"), paused: z.boolean() }).strict(),
   z.object({ type: z.literal("pump") }).strict(),
 ]);
+
+const replayBatchSchema = z
+  .object({
+    items: z
+      .array(z.object({ eventId: identifier, expectedCycle: cycle }).strict())
+      .min(1)
+      .max(20)
+      .refine(
+        (items) =>
+          new Set(items.map((item) => item.eventId)).size === items.length,
+      ),
+  })
+  .strict();
 
 const positiveInteger = (max: number) =>
   z
@@ -166,6 +210,26 @@ export async function parseAction(request: Request): Promise<Action> {
       "Invalid action. Check the event type, endpoint, payload and fields.",
     );
   return parsed.data as Action;
+}
+
+export async function parseReplayBatch(
+  request: Request,
+): Promise<ReplayBatchRequest> {
+  const body = await readBody(request);
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new ApiError(400, "Invalid JSON.");
+  }
+  assertJsonComplexity(value);
+  const parsed = replayBatchSchema.safeParse(value);
+  if (!parsed.success)
+    throw new ApiError(
+      400,
+      "Select 1–20 unique events with their current replay cycles.",
+    );
+  return parsed.data;
 }
 
 export function json(value: unknown, status = 200): Response {

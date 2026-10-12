@@ -1,25 +1,78 @@
 # Validation record
 
-Updated on **2026-10-11** for RelayForge's standalone Next.js runtime and worker on Node.js 24, with application-owned accounts and sessions and a persistent SQLite database. Earlier UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
+Updated on **2026-10-12** for the Recovery release of RelayForge's standalone Next.js runtime and worker on Node.js 24, with application-owned accounts and sessions and a persistent SQLite database. Earlier worker and UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
 
-The current checks cover the dashboard, application accounts, paginated delivery-history API, and standalone worker. Automated verification was rerun after the worker lifecycle repair.
+The current checks cover recovery cycles, bounded bulk replay, the persisted Recovery Lab, application accounts, paginated delivery history, and the standalone worker. Automated checks passed on the Recovery implementation, and the expanded HTTP smoke passed against its compiled release. Production browser interaction checks are recorded separately below.
 
 ## Automated checks
 
-| Check                                     | Current standalone-runtime result                                                                                |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`                       | Passed on the final implementation                                                                               |
-| `npm test`                                | 29 tests passed, 0 failed, including six worker runtime checks with the production SQLite adapter                |
-| `npm run db:migrate`                      | Passed                                                                                                           |
-| `npm run build`                           | Final standard Next.js production build passed, including the delivery-history route                             |
-| `npm run lint`                            | Passed with 0 warnings                                                                                           |
-| `npm run smoke`                           | Passed against the final compiled production server with the standalone worker active, including the history API |
-| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                                                 |
-| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                                        |
+| Check                                     | Current standalone-runtime result                                                                              |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                       | Passed on the Recovery implementation                                                                          |
+| `npm test`                                | 39 tests passed, 0 failed: the prior 29 checks plus nine Recovery checks and one autonomous Recovery Lab check |
+| `npm run db:migrate`                      | Migration 0003 passed on the backed-up local database; existing row counts and legacy attempts were preserved  |
+| `npm run build`                           | Passed on the final Recovery implementation, including `/api/recovery/replay`                                  |
+| `npm run lint`                            | Passed with 0 warnings on the Recovery implementation                                                          |
+| `npm run smoke`                           | Passed against the final compiled Recovery application with the standalone worker active                       |
+| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                                               |
+| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                                      |
 
 The test suite uses the same SQLite adapter as the application. It covers password hashing, credential validation, session expiry and revocation, authentication limits, payload identity, signatures, retry bounds, request validation, tenant isolation, competing SQLite connections, expired leases, stale completion, replay, receiver effect deduplication, and controlled timeout behavior.
 
 The history checks cover strict query bounds, stable pagination across 125 records, search beyond the latest-100 snapshot, literal search characters, and account isolation. Attempt metadata checks cover replay with equal timestamps and interrupted attempts without a measured HTTP duration. Endpoint duration remains available when its measured attempt falls outside the snapshot window. These tests do not reproduce a distributed production deployment.
+
+## Recovery verification — 2026-10-12
+
+Nine service and migration checks, plus one real child-worker check, passed using native SQLite:
+
+| Check                          | Observed result                                                                                                                                                                                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Migration compatibility        | A database with only migrations 0000–0002 retained its original event fields, attempt error, and audit entry. Older attempts and activity kept a null cycle; subsequent replay attempts recorded cycle 2.                                                                                                           |
+| Identity and cycle history     | Replay retained the event ID, endpoint, payload, hash, idempotency key, and creation time. Four cycle-1 failures remained unchanged; a successful replay recorded attempt 1 in cycle 2. Replaying a delivered event did not add a second receiver effect.                                                           |
+| Mixed selections and isolation | Eligible dead records replayed; stale cycles, active leases, non-dead records, guide-managed records, and inaccessible IDs skipped. Foreign and nonexistent IDs returned the same generic skipped result.                                                                                                           |
+| Transaction rollback           | An injected audit-insert failure rolled back both deliveries and their audit records, preserving their prior cycles and attempts.                                                                                                                                                                                   |
+| Competing replay requests      | Two independent SQLite connections submitted the same expected cycle. One replayed and one skipped; the cycle advanced once and one replay audit was recorded.                                                                                                                                                      |
+| Bounds and paused processing   | Empty, duplicate, oversized, zero-cycle, and fractional-cycle requests were rejected before mutation. Valid replay while paused retained its old history and zero new attempts until resumed.                                                                                                                       |
+| Full recovery history          | A dead-record query found an older event outside the snapshot's latest 100 and correctly paginated 125 recovery candidates.                                                                                                                                                                                         |
+| Persisted guide and restart    | Repeated start retained one event. Four real fallback claims led to repair and replay of that same event, separate cycle history, and one event-specific effect. A new service instance read the saved stage; repeated guarded restart created one replacement and preserved the previous event and attempts.       |
+| Workspace capacity             | Starting a guide at the 500-event limit returned a capacity error without leaving an orphan receiver or scenario.                                                                                                                                                                                                   |
+| Autonomous guide processing    | A standalone child worker used actual retry delays, recorded four HTTP `500` failures in cycle 1, and delivered the repaired event with HTTP `200` in cycle 2. No browser or HTTP pump advanced the queue. Pause prevented claims; the event ID and original four attempts were retained, with one receiver effect. |
+
+Before applying migration 0003 to the local application database, a backup was saved outside the repository. The upgrade preserved **92 deliveries, 173 attempts, and nine accounts**. All 173 existing attempt cycles remained null, and SQLite's integrity check passed. These counts describe the local upgrade inspection, not a benchmark or an assertion about another checkout's data.
+
+### Recovery HTTP and browser checks
+
+The development browser was checked using request-driven fallback on **2026-10-12**:
+
+- Recovery Lab progressed through four recorded HTTP `500` failures, receiver repair, and a successful Replay 1. Completion retained the same event and showed one event-specific receiver effect.
+- A pre-migration dead delivery retained its HTTP `500` result, measured 1 ms duration, and four attempts grouped under Legacy history. Escape closed the detail drawer, and the sidebar and main column had `inert` applied while it was open.
+
+The expanded HTTP smoke passed against the final compiled production application with the standalone worker active:
+
+| Request or behavior                   | Observed result                                                                                                                                                                                            |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account and session flow              | Registration and sign-in issued application sessions; sign-out revoked access. Client-supplied identity headers did not authenticate.                                                                      |
+| Mutation protection and replay bounds | Anonymous replay returned `401`; cross-origin replay returned `403`; empty, duplicate, oversized, invalid-cycle, and extra-field requests returned `400`.                                                  |
+| Cross-account privacy                 | A foreign detail read returned `404`. Foreign and nonexistent batch selections produced identical generic skipped results.                                                                                 |
+| Mixed and stale replay                | The eligible dead standard event queued in cycle 2. Delivered, guide-managed, foreign, and missing selections skipped; resubmitting its old cycle also skipped.                                            |
+| Pause and immutable history           | Replay while paused created zero new attempts. After resume, the same payload and original four attempts remained, with one successful cycle-2 attempt appended.                                           |
+| Persisted Recovery Lab                | Repeated start retained one scenario; four failures led to repair, replay, and completion of the same event with one event-specific receiver effect. Signing out and back in restored its completed stage. |
+| Existing reliability contracts        | Matching idempotency submissions retained the event and effect; conflicting payload returned `409`. History bounds, status/search filtering, and stored latest-attempt metadata remained valid.            |
+
+The smoke uses request pumps while waiting for queue results. Autonomous progress without browser or HTTP pumps is established by the separate child-worker test, not by the smoke run. The expanded script creates two isolated test accounts, three events in its primary workspace, and one event in the second workspace for isolation checks.
+
+The final compiled production interface was checked with the worker active:
+
+- Opening the compiled production application restored the completed guide with the same event, Replay 1, and one event-specific effect. The interface showed Worker online.
+- Its detail drawer showed five attempts in separate groups: four HTTP `500` attempts under Initial delivery and one HTTP `200` attempt under Replay 1. The managed event offered Open recovery guide instead of a generic replay control.
+- Selecting two legacy dead deliveries opened a review showing both healthy receivers and the preserved event data. The sidebar and main column had `inert` applied. Escape and Cancel closed the dialog, restored focus to Replay selected (2), and did not submit a replay.
+- Changing the search filter cleared selection and disabled Replay. An empty search result recovered to the original seven dead deliveries after clearing the filter.
+- Confirming the two-record replay showed **2 events requeued, 0 skipped**; the failed list decreased from seven to five. The worker processed the healthy queue.
+- At **390 × 844**, the mobile card view had no document-level horizontal overflow. A card checkbox opened a one-record review dialog within the viewport; Escape restored focus to Replay selected (1), and Clear reset selection.
+- At **800 × 900**, the responsive card view exposed all five Inspect attempts controls without document-level horizontal overflow.
+- The captured production browser console contained no warnings or errors.
+
+[Recovery desktop screenshot](recovery-preview.jpg) shows the completed guide. [Recovery mobile screenshot](recovery-mobile-preview.jpg) shows the card view and two-record replay result. These are targeted interaction checks, not a complete accessibility or browser compatibility audit.
 
 ## Worker runtime checks — 2026-10-11
 
@@ -36,7 +89,7 @@ Six tests cover the standalone worker using isolated native SQLite databases:
 
 The child-process checks ran on Windows. Graceful shutdown is exercised through the worker loop's abort signal; this does not claim that native operating-system signal delivery was tested on every platform. Receivers remain controlled in-process adapters. The checks do not establish external delivery, supervised deployment, throughput, or high availability.
 
-## HTTP smoke check
+## Earlier HTTP smoke check — 2026-10-11
 
 On **2026-10-11**, the smoke check passed against the compiled application started with `npm start` on port 3000 while the standalone worker was active. Development and production smoke checks also passed during the previous UI validation on 2026-10-10. Each run uses a loopback URL and its own test account.
 
@@ -65,7 +118,7 @@ The final compiled production application was checked with the worker stopped an
 - After the worker started, a subsequent live snapshot showed Worker online, the sidebar showed Worker heartbeat just now, and Engineering showed Background worker connected.
 - The workspace retained 37 accepted events, 30 delivered and seven dead, through the process changes.
 
-[Worker dashboard screenshot](worker-preview.jpg) shows the current interface. These observations check status transitions and persisted state; the no-browser processing and crash recovery evidence comes from the runtime tests above.
+[Worker dashboard screenshot](worker-preview.jpg) shows the worker release interface. These observations check status transitions and persisted state; the no-browser processing and crash recovery evidence comes from the runtime tests above.
 
 ## Earlier browser verification — 2026-10-10
 
@@ -96,6 +149,6 @@ These are targeted interaction checks, not a complete accessibility or browser c
 
 ## Reproduce
 
-Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep `npm run dev` running, start `npm run worker` in a second terminal with the same `DATABASE_PATH`, and execute `npm run smoke` in another terminal. Use the dashboard to inspect retries, repair a receiver, replay an event, and reload. Stop and restart the worker to inspect the observed processing mode. `npm test` includes the isolated child-process and worker lifecycle checks.
+Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep the web application running, start `npm run worker` in a second terminal with the same `DATABASE_PATH`, and execute `npm run smoke` in another terminal. Open Recovery to inspect failed deliveries, select standard records for bulk replay, and run Recovery Lab through failure, repair, and replay. Reload to inspect its persisted stage and grouped cycle history. Stop and restart the worker to inspect the observed processing mode. `npm test` includes isolated migration, recovery transaction, child-process, and worker lifecycle checks.
 
 No throughput, external network latency, or availability benchmark is claimed. Dependency audit results are time-specific; rerun them when the dependency tree changes.

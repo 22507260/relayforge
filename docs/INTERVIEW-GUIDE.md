@@ -14,6 +14,10 @@ RelayForge is useful as a portfolio project when you can reproduce its behavior,
 
 Start `npm run worker` before demonstrating autonomous progress. If the retry cap needs more time, prepare a dead event before the timed demo and explain how it reached that state. Do not present prepared data as a transition that happened during the demonstration.
 
+For the guided recovery path, open Recovery and start Recovery Lab. Watch its four recorded HTTP 500 attempts, repair its dedicated receiver, and replay the same event. Show Initial delivery and Replay 1 in the detail panel, the unchanged event identity and payload, and the event's own single receiver effect. Reload during the demonstration to show that the guide reads persistent state. After completion, Run again preserves the earlier event while creating a new scenario.
+
+For a separate operator example, select standard failed deliveries, review their receivers, and submit a bulk replay. Explain why the request includes each selected cycle: another tab may already have replayed a record. Eligible selections are queued; changed selections are skipped. Replay audit and state writes share one transaction, so a database error cannot leave half an operator action committed.
+
 For a separate autonomy demonstration, enqueue a flaky event with the worker running, close every dashboard tab, and then reopen the application to inspect its persisted attempts. Repeat with the worker stopped to explain request fallback. Use recorded timestamps and test evidence rather than assuming that a heartbeat proves delivery success.
 
 ## Explain the project in one paragraph

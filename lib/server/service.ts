@@ -8,6 +8,9 @@ import type {
   DeliveryQuery,
   Endpoint,
   ReceiverMode,
+  RecoveryDemo,
+  ReplayBatchRequest,
+  ReplayBatchResponse,
   Snapshot,
 } from "../contracts.ts";
 import {
@@ -38,6 +41,7 @@ type EndpointRow = {
   description: string;
   color: string;
   mode: ReceiverMode;
+  purpose: Endpoint["purpose"];
 };
 type DeliveryRow = {
   id: string;
@@ -49,12 +53,14 @@ type DeliveryRow = {
   payload_hash: string;
   status: Delivery["status"];
   attempts: number;
+  current_cycle: number;
   created_at: number;
   updated_at: number;
   next_attempt_at: number | null;
   lease_token: string | null;
   lease_until: number | null;
   latest_attempt_id: string | null;
+  latest_cycle: number | null;
   latest_status_code: number | null;
   latest_duration_ms: number | null;
   latest_error: string | null;
@@ -65,6 +71,7 @@ type AttemptRow = {
   id: string;
   event_id: string;
   number: number;
+  cycle: number | null;
   status_code: number | null;
   error: string | null;
   duration_ms: number;
@@ -77,6 +84,16 @@ type ActivityRow = {
   event_id: string | null;
   message: string;
   created_at: number;
+  cycle: number | null;
+  operation_id: string | null;
+};
+type RecoveryDemoRow = {
+  owner: string;
+  endpoint_id: string;
+  event_id: string;
+  previous_event_id: string | null;
+  created_at: number;
+  repaired_at: number | null;
 };
 type ReceiverEnvelope = {
   eventId: string;
@@ -89,7 +106,7 @@ const SNAPSHOT_LIMIT = 100;
 const id = () => crypto.randomUUID();
 
 const DELIVERY_SELECT = `SELECT d.*, e.name AS endpoint_name,
-  a.id AS latest_attempt_id, a.status_code AS latest_status_code,
+  a.id AS latest_attempt_id, a.cycle AS latest_cycle, a.status_code AS latest_status_code,
   CASE WHEN a.finished_at IS NOT NULL AND a.status_code IS NOT NULL THEN a.duration_ms END AS latest_duration_ms,
   a.error AS latest_error, a.created_at AS latest_created_at, a.finished_at AS latest_finished_at
   FROM deliveries d JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner
@@ -106,12 +123,14 @@ function deliveryView(row: DeliveryRow): Delivery {
     endpointName: row.endpoint_name,
     status: row.status,
     attempts: row.attempts,
+    currentCycle: row.current_cycle,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     nextAttemptAt: row.next_attempt_at,
     payload: row.payload,
     latestAttempt: row.latest_attempt_id
       ? {
+          cycle: row.latest_cycle,
           statusCode: row.latest_status_code,
           durationMs: row.latest_duration_ms,
           error: row.latest_error,
@@ -126,6 +145,7 @@ function attemptView(row: AttemptRow): Attempt {
     id: row.id,
     eventId: row.event_id,
     number: row.number,
+    cycle: row.cycle,
     statusCode: row.status_code,
     error: row.error,
     durationMs: row.duration_ms,
@@ -179,13 +199,15 @@ export class RelayService {
     now = this.clock(),
   ) {
     return this.stmt(
-      "INSERT INTO activity (id, owner, kind, event_id, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle) VALUES (?, ?, ?, ?, ?, ?, (SELECT current_cycle FROM deliveries WHERE owner = ? AND id = ?))",
       id(),
       this.owner,
       kind,
       eventId,
       message,
       now,
+      this.owner,
+      eventId,
     );
   }
 
@@ -243,7 +265,12 @@ export class RelayService {
     payload: Record<string, unknown> = { message: "Hello from RelayForge" },
     idempotencyKey = id(),
   ): Promise<string> {
-    await this.endpoint(endpointId);
+    const endpoint = await this.endpoint(endpointId);
+    if (endpoint.purpose !== "standard")
+      throw new ApiError(
+        409,
+        "Recovery Lab events are managed by the recovery guide.",
+      );
     const immutablePayload = canonicalJson(payload);
     if (new TextEncoder().encode(immutablePayload).byteLength > 12_288)
       throw new ApiError(413, "Event payload is too large.");
@@ -270,7 +297,7 @@ export class RelayService {
         EVENT_LIMIT,
       ),
       this.stmt(
-        "INSERT INTO activity (id, owner, kind, event_id, message, created_at) SELECT ?, ?, 'accepted', id, ?, ? FROM deliveries WHERE owner = ? AND id = ?",
+        "INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle) SELECT ?, ?, 'accepted', id, ?, ?, current_cycle FROM deliveries WHERE owner = ? AND id = ?",
         id(),
         this.owner,
         `${eventType} accepted into the durable queue`,
@@ -346,6 +373,11 @@ export class RelayService {
         break;
       case "set-receiver": {
         const endpoint = await this.endpoint(action.endpointId);
+        if (endpoint.purpose !== "standard")
+          throw new ApiError(
+            409,
+            "Repair Recovery Lab through the recovery guide.",
+          );
         await this.db.batch([
           this.stmt(
             "UPDATE endpoints SET mode = ? WHERE owner = ? AND id = ?",
@@ -362,31 +394,42 @@ export class RelayService {
         break;
       }
       case "replay": {
-        const now = this.clock();
-        const row = await this.stmt(
-          "UPDATE deliveries SET status = 'pending', attempts = 0, next_attempt_at = ?, updated_at = ?, lease_token = NULL, lease_until = NULL WHERE owner = ? AND id = ? AND status IN ('dead', 'delivered') AND lease_token IS NULL RETURNING id",
-          now,
-          now,
-          this.owner,
-          action.eventId,
-        ).first<{ id: string }>();
-        if (!row)
+        const results = await this.replaySelections(
+          [{ eventId: action.eventId, expectedCycle: action.expectedCycle }],
+          "standard",
+          true,
+        );
+        if (!results[0])
           throw new ApiError(
             409,
-            "Only a completed or dead delivery can be replayed.",
+            "Only an unchanged completed or dead standard delivery can be replayed.",
           );
-        await this.activity(
-          "replay",
-          row.id,
-          "Event replayed with its original identity and immutable payload",
-          now,
-        ).run();
+        await this.pump();
+        break;
+      }
+      case "start-recovery-demo":
+        await this.startRecoveryDemo(action.previousEventId);
+        await this.pump();
+        break;
+      case "repair-recovery-demo":
+        await this.repairRecoveryDemo(action.eventId, action.expectedCycle);
+        break;
+      case "replay-recovery-demo": {
+        const results = await this.replaySelections(
+          [{ eventId: action.eventId, expectedCycle: action.expectedCycle }],
+          "recovery",
+        );
+        if (!results[0])
+          throw new ApiError(
+            409,
+            "Repair the unchanged failed recovery event before replaying it.",
+          );
         await this.pump();
         break;
       }
       case "demo": {
         const { results } = await this.stmt(
-          "SELECT id FROM endpoints WHERE owner = ? ORDER BY id",
+          "SELECT id FROM endpoints WHERE owner = ? AND purpose = 'standard' ORDER BY id",
           this.owner,
         ).all<{ id: string }>();
         const batchId = id();
@@ -428,6 +471,264 @@ export class RelayService {
     return this.snapshot();
   }
 
+  /** Eligibility, audit, and cycle reset share one write transaction. */
+  private async replaySelections(
+    selections: { eventId: string; expectedCycle?: number }[],
+    purpose: Endpoint["purpose"],
+    includeDelivered = false,
+  ): Promise<({ id: string; current_cycle: number } | null)[]> {
+    const now = this.clock();
+    const operationId = id();
+    const statements: SqlStatement[] = [];
+    for (const selection of selections) {
+      const auditId = id();
+      const eligible = `owner = ? AND id = ? AND status IN (${includeDelivered ? "'dead', 'delivered'" : "'dead'"})
+        AND lease_token IS NULL AND lease_until IS NULL AND current_cycle < ?
+        AND (? IS NULL OR current_cycle = ?)
+        AND EXISTS (SELECT 1 FROM endpoints e WHERE e.owner = deliveries.owner AND e.id = deliveries.endpoint_id AND e.purpose = ?)
+        ${
+          purpose === "recovery"
+            ? `AND EXISTS (SELECT 1 FROM recovery_demos r JOIN endpoints e ON e.id = r.endpoint_id AND e.owner = r.owner
+          WHERE r.owner = deliveries.owner AND r.event_id = deliveries.id AND r.endpoint_id = deliveries.endpoint_id
+          AND r.repaired_at IS NOT NULL AND e.mode = 'healthy')`
+            : ""
+        }`;
+      const values = [
+        this.owner,
+        selection.eventId,
+        Number.MAX_SAFE_INTEGER,
+        selection.expectedCycle ?? null,
+        selection.expectedCycle ?? null,
+        purpose,
+      ];
+      statements.push(
+        this.stmt(
+          `INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle, operation_id)
+          SELECT ?, owner, 'replay', id, 'Event replayed with its original identity and immutable payload', ?, current_cycle + 1, ?
+          FROM deliveries WHERE ${eligible}`,
+          auditId,
+          now,
+          operationId,
+          ...values,
+        ),
+        this.stmt(
+          `UPDATE deliveries SET status = 'pending', attempts = 0, current_cycle = current_cycle + 1,
+          next_attempt_at = ?, updated_at = ?, lease_token = NULL, lease_until = NULL
+          WHERE ${eligible} AND EXISTS (SELECT 1 FROM activity a WHERE a.owner = deliveries.owner AND a.event_id = deliveries.id
+            AND a.id = ? AND a.cycle = deliveries.current_cycle + 1 AND a.operation_id = ?)
+          RETURNING id, current_cycle`,
+          now,
+          now,
+          ...values,
+          auditId,
+          operationId,
+        ),
+      );
+    }
+    const results = await this.db.batch<{ id: string; current_cycle: number }>(
+      statements,
+    );
+    return selections.map(
+      (_, index) => results[index * 2 + 1].results[0] ?? null,
+    );
+  }
+
+  async replayBatch(request: ReplayBatchRequest): Promise<ReplayBatchResponse> {
+    if (
+      !request ||
+      !Array.isArray(request.items) ||
+      request.items.length < 1 ||
+      request.items.length > 20 ||
+      request.items.some(
+        (item) =>
+          !item ||
+          typeof item.eventId !== "string" ||
+          !/^[a-zA-Z0-9_-]{1,100}$/.test(item.eventId) ||
+          !Number.isSafeInteger(item.expectedCycle) ||
+          item.expectedCycle < 1,
+      ) ||
+      new Set(request.items.map((item) => item.eventId)).size !==
+        request.items.length
+    )
+      throw new ApiError(
+        400,
+        "Select 1–20 unique events with their current replay cycles.",
+      );
+    const rows = await this.replaySelections(request.items, "standard");
+    return {
+      results: request.items.map((item, index) => ({
+        eventId: item.eventId,
+        outcome: rows[index] ? "replayed" : "skipped",
+        currentCycle: rows[index]?.current_cycle ?? null,
+      })),
+      snapshot: await this.snapshot(),
+    };
+  }
+
+  private async currentRecoveryDemo(): Promise<RecoveryDemoRow | null> {
+    return this.stmt(
+      "SELECT * FROM recovery_demos WHERE owner = ?",
+      this.owner,
+    ).first<RecoveryDemoRow>();
+  }
+
+  private async startRecoveryDemo(previousEventId?: string): Promise<void> {
+    const current = await this.currentRecoveryDemo();
+    if (current && !previousEventId) return;
+    if (current?.previous_event_id === previousEventId && previousEventId)
+      return;
+    const now = this.clock();
+    const suffix = (await hashPayload(this.owner)).slice(0, 20);
+    const endpointId = `recovery_${suffix}`;
+    const eventId = id();
+    const eventType = "recovery.proof";
+    const payload = {
+      source: "recovery-lab",
+      scenario: "repair-and-replay",
+      run: eventId,
+    };
+    const immutablePayload = canonicalJson(payload);
+    const hash = await hashPayload(canonicalJson({ eventType, payload }));
+    // These predicates are evaluated under BEGIN IMMEDIATE, never by a stale preflight read.
+    const eligible = `EXISTS (SELECT 1 FROM workspaces WHERE owner = ?)
+      AND (SELECT COUNT(*) FROM deliveries WHERE owner = ?) < ?
+      AND NOT EXISTS (SELECT 1 FROM deliveries WHERE owner = ? AND endpoint_id = ?
+        AND (status IN ('pending', 'retrying') OR lease_token IS NOT NULL OR lease_until IS NOT NULL))
+      AND ${
+        previousEventId
+          ? `EXISTS (SELECT 1 FROM recovery_demos r JOIN deliveries d ON d.owner = r.owner AND d.id = r.event_id
+          WHERE r.owner = ? AND r.event_id = ? AND d.status = 'delivered' AND d.lease_token IS NULL AND d.lease_until IS NULL)`
+          : "NOT EXISTS (SELECT 1 FROM recovery_demos WHERE owner = ?)"
+      }`;
+    const values: unknown[] = [
+      this.owner,
+      this.owner,
+      EVENT_LIMIT,
+      this.owner,
+      endpointId,
+      this.owner,
+    ];
+    if (previousEventId) values.push(previousEventId);
+    const results = await this.db.batch<{ id: string }>([
+      this.stmt(
+        `INSERT INTO endpoints (id, owner, name, description, color, mode, purpose)
+        SELECT ?, ?, 'Recovery Lab', 'Managed receiver · repair and replay through the recovery guide', 'violet', 'failing', 'recovery'
+        WHERE ${eligible} ON CONFLICT(id) DO UPDATE SET mode = 'failing'
+        WHERE endpoints.owner = excluded.owner AND endpoints.purpose = 'recovery'`,
+        endpointId,
+        this.owner,
+        ...values,
+      ),
+      this.stmt(
+        `INSERT INTO deliveries (id, owner, endpoint_id, event_type, payload, payload_hash, idempotency_key,
+          status, attempts, current_cycle, created_at, updated_at, next_attempt_at)
+        SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, ?, ?, ? WHERE ${eligible}
+        AND EXISTS (SELECT 1 FROM endpoints WHERE owner = ? AND id = ? AND purpose = 'recovery' AND mode = 'failing') RETURNING id`,
+        eventId,
+        this.owner,
+        endpointId,
+        eventType,
+        immutablePayload,
+        hash,
+        `recovery:${eventId}`,
+        now,
+        now,
+        now,
+        ...values,
+        this.owner,
+        endpointId,
+      ),
+      this.stmt(
+        `INSERT INTO recovery_demos (owner, endpoint_id, event_id, previous_event_id, created_at, repaired_at)
+        SELECT owner, endpoint_id, id, ?, ?, NULL FROM deliveries WHERE owner = ? AND id = ?
+        ON CONFLICT(owner) DO UPDATE SET endpoint_id = excluded.endpoint_id, event_id = excluded.event_id,
+          previous_event_id = excluded.previous_event_id, created_at = excluded.created_at, repaired_at = NULL`,
+        previousEventId ?? null,
+        now,
+        this.owner,
+        eventId,
+      ),
+      this.stmt(
+        `INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle)
+        SELECT ?, owner, 'accepted', id, 'Recovery Lab event accepted into the durable queue', ?, current_cycle
+        FROM deliveries WHERE owner = ? AND id = ?`,
+        id(),
+        now,
+        this.owner,
+        eventId,
+      ),
+    ]);
+    if (results[1].results[0]) return;
+    const stored = await this.currentRecoveryDemo();
+    if (
+      stored &&
+      (!previousEventId || stored.previous_event_id === previousEventId)
+    )
+      return;
+    const count = await this.stmt(
+      "SELECT COUNT(*) AS total FROM deliveries WHERE owner = ?",
+      this.owner,
+    ).first<{ total: number }>();
+    if ((count?.total ?? 0) >= EVENT_LIMIT)
+      throw new ApiError(
+        429,
+        "This demo workspace has reached its 500-event limit.",
+      );
+    throw new ApiError(
+      409,
+      "Complete the current recovery run before starting another.",
+    );
+  }
+
+  private async repairRecoveryDemo(
+    eventId: string,
+    expectedCycle: number,
+  ): Promise<void> {
+    const auditId = id();
+    const now = this.clock();
+    const results = await this.db.batch<{ id: string }>([
+      this.stmt(
+        `INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle, operation_id)
+        SELECT ?, d.owner, 'system', d.id, 'Recovery Lab receiver repaired; failed event is ready for replay', ?, d.current_cycle, ?
+        FROM recovery_demos r JOIN deliveries d ON d.id = r.event_id AND d.owner = r.owner
+        JOIN endpoints e ON e.id = r.endpoint_id AND e.owner = r.owner
+        WHERE r.owner = ? AND r.event_id = ? AND d.endpoint_id = r.endpoint_id AND d.status = 'dead'
+        AND d.current_cycle = ? AND d.lease_token IS NULL AND d.lease_until IS NULL
+        AND e.purpose = 'recovery' AND e.mode = 'failing' AND r.repaired_at IS NULL RETURNING id`,
+        auditId,
+        now,
+        id(),
+        this.owner,
+        eventId,
+        expectedCycle,
+      ),
+      this.stmt(
+        `UPDATE endpoints SET mode = 'healthy' WHERE owner = ? AND purpose = 'recovery'
+        AND id = (SELECT endpoint_id FROM recovery_demos WHERE owner = ? AND event_id = ?)
+        AND EXISTS (SELECT 1 FROM activity WHERE owner = ? AND id = ?)`,
+        this.owner,
+        this.owner,
+        eventId,
+        this.owner,
+        auditId,
+      ),
+      this.stmt(
+        `UPDATE recovery_demos SET repaired_at = ? WHERE owner = ? AND event_id = ?
+        AND EXISTS (SELECT 1 FROM activity WHERE owner = ? AND id = ?)`,
+        now,
+        this.owner,
+        eventId,
+        this.owner,
+        auditId,
+      ),
+    ]);
+    if (!results[0].results[0])
+      throw new ApiError(
+        409,
+        "Only the unchanged failed recovery run can be repaired.",
+      );
+  }
+
   /** API calls and the standalone worker claim at most 12 due deliveries per owner. */
   async pump(): Promise<void> {
     const workspace = await this.workspace();
@@ -436,9 +737,9 @@ export class RelayService {
     // An interrupted worker consumes an attempt. Recovery never silently drops it.
     await this.db.batch([
       this.stmt(
-        `INSERT INTO activity (id, owner, kind, event_id, message, created_at)
+        `INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle)
         SELECT lower(hex(randomblob(16))), owner, CASE WHEN attempts >= ? THEN 'dead' ELSE 'system' END, id,
-        'Expired worker lease recovered', ? FROM deliveries WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL`,
+        'Expired worker lease recovered', ?, current_cycle FROM deliveries WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL`,
         MAX_ATTEMPTS,
         now,
         this.owner,
@@ -488,7 +789,7 @@ export class RelayService {
           this.owner,
         ),
         this.stmt(
-          "INSERT INTO attempts (id, owner, event_id, number, created_at) SELECT ?, owner, id, attempts, ? FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
+          "INSERT INTO attempts (id, owner, event_id, number, created_at, cycle) SELECT ?, owner, id, attempts, ?, current_cycle FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
           token,
           claimAt,
           this.owner,
@@ -546,7 +847,7 @@ export class RelayService {
           token,
         ),
         this.stmt(
-          "INSERT INTO activity (id, owner, kind, event_id, message, created_at) SELECT ?, owner, ?, id, ?, ? FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
+          "INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle) SELECT ?, owner, ?, id, ?, ?, current_cycle FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
           id(),
           successful ? "delivered" : status === "dead" ? "dead" : "retry",
           message,
@@ -706,6 +1007,44 @@ export class RelayService {
     };
   }
 
+  private async recoveryDemoSnapshot(): Promise<RecoveryDemo | null> {
+    const current = await this.currentRecoveryDemo();
+    if (!current) return null;
+    const [delivery, effects] = await Promise.all([
+      this.stmt(
+        `${DELIVERY_SELECT} WHERE d.owner = ? AND d.id = ? AND d.endpoint_id = ?`,
+        this.owner,
+        current.event_id,
+        current.endpoint_id,
+      ).first<DeliveryRow>(),
+      this.stmt(
+        "SELECT COUNT(*) AS total FROM receiver_effects WHERE owner = ? AND event_id = ?",
+        this.owner,
+        current.event_id,
+      ).first<{ total: number }>(),
+    ]);
+    if (!delivery) return null;
+    const stage: RecoveryDemo["stage"] =
+      delivery.status === "delivered"
+        ? "completed"
+        : delivery.status === "dead"
+          ? current.repaired_at === null
+            ? "awaiting-repair"
+            : "ready-to-replay"
+          : current.repaired_at === null
+            ? "failing"
+            : "recovering";
+    return {
+      eventId: current.event_id,
+      endpointId: current.endpoint_id,
+      createdAt: current.created_at,
+      repairedAt: current.repaired_at,
+      stage,
+      delivery: deliveryView(delivery),
+      businessEffects: effects?.total ?? 0,
+    };
+  }
+
   async snapshot(): Promise<Snapshot> {
     const workspace = await this.workspace();
     const now = this.clock();
@@ -793,6 +1132,7 @@ export class RelayService {
         description: row.description,
         color: row.color,
         mode: row.mode,
+        purpose: row.purpose,
         deliveries: row.deliveries,
         delivered: row.delivered ?? 0,
         lastDurationMs: row.last_duration_ms,
@@ -804,7 +1144,10 @@ export class RelayService {
         eventId: row.event_id,
         message: row.message,
         createdAt: row.created_at,
+        cycle: row.cycle,
+        operationId: row.operation_id,
       })),
+      recoveryDemo: await this.recoveryDemoSnapshot(),
       metrics: {
         total,
         delivered,

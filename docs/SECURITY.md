@@ -13,6 +13,8 @@ RelayForge is a controlled reliability lab. Its safeguards are scoped to this ap
 - Immutable events, database uniqueness constraints, lease tokens, and receiver effect deduplication protect distinct parts of the delivery lifecycle.
 - Only built-in destinations are accepted. The delivery processor does not fetch arbitrary URLs.
 - The standalone worker uses the same ownership-scoped processor, conditional claims, and completion tokens as request pumping. Its heartbeat informs the dashboard's observed processing mode; it does not grant authorization or replace lease protection.
+- Recovery batch requests require the same origin and an authenticated session. They accept at most 20 unique event IDs with their expected cycles. Eligibility is checked inside the write transaction; changed, leased, completed, inaccessible, and guide-managed records are skipped without exposing another account's state.
+- Replay state and its audit entry are committed together. A stale selection cannot reset a newer cycle. Recovery Lab receiver settings and event replay are restricted to the account's persisted guide actions; general send, receiver-change, and replay actions cannot bypass those controls.
 
 Deploy behind HTTPS and keep `DATABASE_PATH` on persistent storage. Treat the SQLite file and backups as sensitive: they contain account information, password hashes, sessions, signing keys, and delivery payloads. Never publish the local database or real credentials in the repository.
 
@@ -27,7 +29,7 @@ npm audit
 
 Audit results depend on the resolved dependency versions and the advisory database at the time of the check. See [Validation](VALIDATION.md) for the current recorded results. Development packages can contribute code to generated bundles, so review the full audit as well as the production dependency audit.
 
-On **2026-10-10**, the production dependency audit reported zero findings. The full audit reported five high findings through `braces` → `micromatch` → `fast-glob` → `@next/eslint-plugin-next` → `eslint-config-next`. These belong to the lint dependency chain; the application APIs do not accept user-supplied glob patterns. Track the upstream [braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) and rerun the full audit when updating lint dependencies.
+On **2026-10-12**, the production dependency audit reported zero findings. The full audit reported five high findings through `braces` → `micromatch` → `fast-glob` → `@next/eslint-plugin-next` → `eslint-config-next`. These belong to the lint dependency chain; the application APIs do not accept user-supplied glob patterns. Track the upstream [braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) and rerun the full audit when updating lint dependencies.
 
 Review suggested dependency changes before applying them. A forced fix can introduce a breaking downgrade or change unrelated parts of the runtime. Track upstream fixes, review changed dependencies, and rerun tests and build after an upgrade.
 

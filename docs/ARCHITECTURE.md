@@ -24,16 +24,17 @@ These are logical boundaries sharing one database and delivery implementation. T
 
 ## HTTP and shared contracts
 
-| Route                     | Purpose                                                           | Authentication                                 |
-| ------------------------- | ----------------------------------------------------------------- | ---------------------------------------------- |
-| `POST /api/auth/register` | Create an email/password account and a session                    | Same-origin checks and validated credentials   |
-| `POST /api/auth/login`    | Verify credentials and create a session                           | Same-origin checks and validated credentials   |
-| `POST /api/auth/logout`   | Revoke the current session                                        | Session and same-origin checks                 |
-| `GET /api/snapshot`       | Read persisted dashboard state; no mutation                       | Application session                            |
-| `GET /api/deliveries`     | Search and page through tenant-owned delivery history             | Application session                            |
-| `POST /api/action`        | Initialize, send, demo, set receiver mode, replay, pause, or pump | Application session and same-origin checks     |
-| `GET /api/deliveries/:id` | Read one tenant-owned delivery and its attempts                   | Application session                            |
-| `POST /api/receiver/:id`  | Verify a signed envelope and invoke a controlled receiver         | HMAC; no browser session required by the route |
+| Route                       | Purpose                                                             | Authentication                                 |
+| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
+| `POST /api/auth/register`   | Create an email/password account and a session                      | Same-origin checks and validated credentials   |
+| `POST /api/auth/login`      | Verify credentials and create a session                             | Same-origin checks and validated credentials   |
+| `POST /api/auth/logout`     | Revoke the current session                                          | Session and same-origin checks                 |
+| `GET /api/snapshot`         | Read persisted dashboard state; no mutation                         | Application session                            |
+| `GET /api/deliveries`       | Search and page through tenant-owned delivery history               | Application session                            |
+| `POST /api/action`          | Initialize, send, demo, set receiver mode, replay, pause, or pump   | Application session and same-origin checks     |
+| `POST /api/recovery/replay` | Replay up to 20 selected dead standard deliveries with cycle guards | Application session and same-origin checks     |
+| `GET /api/deliveries/:id`   | Read one tenant-owned delivery and its attempts                     | Application session                            |
+| `POST /api/receiver/:id`    | Verify a signed envelope and invoke a controlled receiver           | HMAC; no browser session required by the route |
 
 Accounts and sessions belong to the application. A browser request establishes identity through its session cookie; client-supplied identity headers and owner IDs are not trusted.
 
@@ -70,7 +71,17 @@ stateDiagram-v2
     delivered --> pending: manual replay
 ```
 
-Leasing is separate from visible status. A leased delivery can be pending or retrying. Attempt numbers represent the current replay cycle; retained history can contain the same number from earlier cycles. No replay-cycle identifier is modeled yet.
+Leasing is separate from visible status. A leased delivery can be pending or retrying. A delivery's `currentCycle` starts at one and increases on replay. Each new claim records that cycle with its attempt number. Old attempts have a null cycle and appear as Legacy history; migration does not guess boundaries from timestamps or repeated attempt numbers.
+
+## Recovery workspace
+
+Recovery reads the complete paginated delivery history with `status=dead`, rather than relying on the snapshot window. Its `POST /api/recovery/replay` request contains 1–20 unique `{eventId, expectedCycle}` selections. The response includes per-item replayed/skipped outcomes, the new cycle for successful items, and a snapshot. Skipped items have a null cycle, including inaccessible IDs.
+
+Bulk replay is best-effort for individual selections but one database transaction for the write operation. Only account-owned, dead, lease-free, standard-receiver records matching the selected cycle are eligible. A guarded audit insert and state update occur together; successful items retain identity and payload, increment their cycle, and reset the attempt budget. A database error rolls back all writes. Pause still blocks claims after queueing. Single-event replay applies the same audit/state consistency and supports an optional expected-cycle guard.
+
+The persisted Recovery Lab links one current event and one dedicated receiver to a workspace. Its stage is derived from durable delivery state, repair state, and receiver effects. Initial start is idempotent; replacing a completed scenario requires its previous event ID. The controlled receiver returns HTTP 500 until the failed event is repaired through the guide, then acknowledges its replay. Generic send, mode-change, and replay actions cannot operate that managed receiver. Old scenario events and attempts remain inspectable after a new scenario starts.
+
+Replay audit entries include the target cycle and an operation ID. The completion proof uses the guide event's own effect count, not the workspace-wide aggregate. The guide shares the existing processor, HMAC envelope, retry schedule, and lease fencing; it does not simulate progress with a browser timer.
 
 The standalone worker checks persisted due work independently of HTTP requests and invokes the same tenant-scoped processor as the API. When no recent worker heartbeat is observed, the dashboard continues requesting pump actions as a fallback. A snapshot read never advances processing. Pause preserves queued data and blocks new claims in either process; it does not cancel work already claimed.
 

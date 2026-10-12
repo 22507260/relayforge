@@ -25,6 +25,7 @@ import {
   Plus,
   Radio,
   RotateCcw,
+  Wrench,
   Search,
   Send,
   ShieldCheck,
@@ -48,6 +49,8 @@ import type {
   DeliveryStatus,
   Endpoint,
   ReceiverMode,
+  ReplayBatchRequest,
+  ReplayBatchResponse,
   Snapshot,
 } from "@/lib/contracts";
 import {
@@ -69,14 +72,21 @@ import {
   StatusBadge,
   ViewAll,
 } from "./components/relay-ui";
+import { RecoveryPanel } from "./components/recovery-panel";
 
 type View =
-  "Overview" | "Deliveries" | "Endpoints" | "Activity" | "Engineering";
+  | "Overview"
+  | "Deliveries"
+  | "Recovery"
+  | "Endpoints"
+  | "Activity"
+  | "Engineering";
 type StatusFilter = "all" | DeliveryStatus;
 type Notice = { id: number; message: string; error?: boolean };
 const navigation = [
   { name: "Overview", icon: LayoutDashboard },
   { name: "Deliveries", icon: Layers3 },
+  { name: "Recovery", icon: Wrench },
   { name: "Endpoints", icon: Webhook },
   { name: "Activity", icon: ActivityIcon },
   { name: "Engineering", icon: Code2 },
@@ -114,9 +124,12 @@ class RequestError extends Error {
   }
 }
 
+const loadRecoveryPage = (query: string, signal: AbortSignal) =>
+  api<DeliveryPage>(`/api/deliveries?${query}`, undefined, signal);
+
 async function api<T>(
   url: string,
-  action?: Action,
+  action?: Action | ReplayBatchRequest,
   signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch(
@@ -386,6 +399,8 @@ function DeliveryDrawer({
   close,
   replay,
   viewEndpoint,
+  recoveryEndpointIds,
+  openRecovery,
   busy,
   copy,
 }: {
@@ -393,8 +408,10 @@ function DeliveryDrawer({
   version: number;
   maxAttempts: number;
   close: () => void;
-  replay: () => void;
+  replay: (eventId: string, expectedCycle: number) => void;
   viewEndpoint: (id: string) => void;
+  recoveryEndpointIds: string[];
+  openRecovery: () => void;
   busy: boolean;
   copy: (text: string) => void;
 }) {
@@ -425,7 +442,23 @@ function DeliveryDrawer({
     return () => controller.abort();
   }, [id, version, retry]);
   const event = detail?.delivery;
-  const last = detail?.attempts[detail.attempts.length - 1];
+  const managed = Boolean(
+    event && recoveryEndpointIds.includes(event.endpointId),
+  );
+  const last =
+    detail?.attempts
+      .filter((attempt) => attempt.cycle === event?.currentCycle)
+      .at(-1) ??
+    (event && event.attempts > 0 && event.latestAttempt?.cycle === null
+      ? detail?.attempts.filter((attempt) => attempt.cycle === null).at(-1)
+      : undefined);
+  const attemptGroups = Array.from(
+    (detail?.attempts ?? []).reduce((groups, attempt) => {
+      const key = attempt.cycle;
+      groups.set(key, [...(groups.get(key) ?? []), attempt]);
+      return groups;
+    }, new Map<number | null, DeliveryDetail["attempts"]>()),
+  ).sort(([a], [b]) => (b ?? 0) - (a ?? 0));
   let prettyPayload = event?.payload || "{}";
   try {
     prettyPayload = JSON.stringify(JSON.parse(prettyPayload), null, 2);
@@ -446,7 +479,7 @@ function DeliveryDrawer({
             ? new Date(last.finishedAt).toISOString()
             : null,
         }
-      : { message: "No attempt has been recorded yet." },
+      : { message: "No attempt has been recorded in the current cycle yet." },
     null,
     2,
   );
@@ -499,11 +532,20 @@ function DeliveryDrawer({
             </time>
           </div>
           <div className="drawer-actions">
-            {(event.status === "dead" || event.status === "delivered") && (
-              <Button onClick={replay} disabled={busy}>
-                <RotateCcw size={16} />
-                Replay event
+            {managed ? (
+              <Button onClick={openRecovery}>
+                <Wrench size={16} /> Open recovery guide
               </Button>
+            ) : (
+              (event.status === "dead" || event.status === "delivered") && (
+                <Button
+                  onClick={() => replay(event.id, event.currentCycle)}
+                  disabled={busy}
+                >
+                  <RotateCcw size={16} />
+                  Replay event
+                </Button>
+              )
             )}
             <Button
               variant="secondary"
@@ -528,10 +570,15 @@ function DeliveryDrawer({
                 <strong>{event.endpointName}</strong>
               </div>
               <div>
-                <span>Attempts this run</span>
+                <span>Attempts this cycle</span>
                 <strong>
                   {event.attempts} of {maxAttempts}
                 </strong>
+                <small className="drawer-cycle-label">
+                  {event.currentCycle === 1
+                    ? "Initial delivery"
+                    : `Replay ${event.currentCycle - 1}`}
+                </small>
               </div>
               <div>
                 <span>Last HTTP status</span>
@@ -603,96 +650,121 @@ function DeliveryDrawer({
                 Waiting for the processor to claim this event.
               </div>
             ) : (
-              detail!.attempts
-                .slice()
-                .reverse()
-                .map((attempt) => {
-                  const success =
-                    attempt.statusCode != null &&
-                    attempt.statusCode >= 200 &&
-                    attempt.statusCode < 300;
-                  const inProgress = attempt.finishedAt == null;
-                  return (
-                    <div className="timeline-item" key={attempt.id}>
-                      <span
-                        className={`timeline-dot ${success ? "success" : inProgress ? "pending" : "failed"}`}
-                      >
-                        {success ? (
-                          <Check size={13} />
-                        ) : inProgress ? (
-                          <Clock3 size={13} />
-                        ) : (
-                          <X size={13} />
-                        )}
-                      </span>
-                      <div className="timeline-content">
-                        <button
-                          className="timeline-toggle"
-                          aria-expanded={expanded === attempt.id}
-                          onClick={() =>
-                            setExpanded(
-                              expanded === attempt.id ? null : attempt.id,
-                            )
-                          }
-                        >
-                          <span>
-                            <strong>Attempt {attempt.number}</strong>
-                            <small>
-                              {inProgress
-                                ? "Processing the event"
-                                : success
-                                  ? "Acknowledged by receiver"
-                                  : attempt.statusCode === 504
-                                    ? "Receiver deadline exceeded"
-                                    : attempt.statusCode
-                                      ? "Receiver returned an error"
-                                      : "Delivery interrupted"}
-                            </small>
+              attemptGroups.map(([cycle, attempts]) => (
+                <div className="attempt-cycle-group" key={cycle ?? "legacy"}>
+                  <div className="attempt-cycle-heading">
+                    <h4>
+                      {cycle == null
+                        ? "Legacy history"
+                        : cycle === 1
+                          ? "Initial delivery"
+                          : `Replay ${cycle - 1}`}
+                    </h4>
+                    <span>
+                      {attempts.length}{" "}
+                      {attempts.length === 1 ? "attempt" : "attempts"}
+                    </span>
+                  </div>
+                  {cycle == null && (
+                    <p className="legacy-attempt-note">
+                      Recorded before cycle tracking. Original history
+                      preserved.
+                    </p>
+                  )}
+                  {attempts
+                    .slice()
+                    .reverse()
+                    .map((attempt) => {
+                      const success =
+                        attempt.statusCode != null &&
+                        attempt.statusCode >= 200 &&
+                        attempt.statusCode < 300;
+                      const inProgress = attempt.finishedAt == null;
+                      return (
+                        <div className="timeline-item" key={attempt.id}>
+                          <span
+                            className={`timeline-dot ${success ? "success" : inProgress ? "pending" : "failed"}`}
+                          >
+                            {success ? (
+                              <Check size={13} />
+                            ) : inProgress ? (
+                              <Clock3 size={13} />
+                            ) : (
+                              <X size={13} />
+                            )}
                           </span>
-                          <span className="timeline-meta">
-                            <b
-                              className={
-                                success
-                                  ? "success-text"
-                                  : inProgress
-                                    ? "muted"
-                                    : "danger-text"
+                          <div className="timeline-content">
+                            <button
+                              className="timeline-toggle"
+                              aria-expanded={expanded === attempt.id}
+                              onClick={() =>
+                                setExpanded(
+                                  expanded === attempt.id ? null : attempt.id,
+                                )
                               }
                             >
-                              {attempt.statusCode ||
-                                (inProgress ? "WORKING" : "INTERRUPTED")}
-                            </b>
-                            <time title={fullDate(attempt.createdAt)}>
-                              {formatTime(attempt.createdAt)}
-                            </time>
-                          </span>
-                          <ChevronDown
-                            size={15}
-                            className={expanded === attempt.id ? "rotated" : ""}
-                          />
-                        </button>
-                        {expanded === attempt.id && (
-                          <div className="attempt-extra">
-                            <p>
-                              {attempt.error ||
-                                (inProgress
-                                  ? "The processor has claimed this event. The response has not been recorded yet."
-                                  : "Signature verified. The receiver acknowledged the event.")}
-                            </p>
-                            <span>
-                              Duration:{" "}
-                              {inProgress
-                                ? "In progress"
-                                : attempt.statusCode == null
-                                  ? "—"
-                                  : formatDuration(attempt.durationMs)}
-                            </span>
+                              <span>
+                                <strong>Attempt {attempt.number}</strong>
+                                <small>
+                                  {inProgress
+                                    ? "Processing the event"
+                                    : success
+                                      ? "Acknowledged by receiver"
+                                      : attempt.statusCode === 504
+                                        ? "Receiver deadline exceeded"
+                                        : attempt.statusCode
+                                          ? "Receiver returned an error"
+                                          : "Delivery interrupted"}
+                                </small>
+                              </span>
+                              <span className="timeline-meta">
+                                <b
+                                  className={
+                                    success
+                                      ? "success-text"
+                                      : inProgress
+                                        ? "muted"
+                                        : "danger-text"
+                                  }
+                                >
+                                  {attempt.statusCode ||
+                                    (inProgress ? "WORKING" : "INTERRUPTED")}
+                                </b>
+                                <time title={fullDate(attempt.createdAt)}>
+                                  {formatTime(attempt.createdAt)}
+                                </time>
+                              </span>
+                              <ChevronDown
+                                size={15}
+                                className={
+                                  expanded === attempt.id ? "rotated" : ""
+                                }
+                              />
+                            </button>
+                            {expanded === attempt.id && (
+                              <div className="attempt-extra">
+                                <p>
+                                  {attempt.error ||
+                                    (inProgress
+                                      ? "The processor has claimed this event. The response has not been recorded yet."
+                                      : "Signature verified. The receiver acknowledged the event.")}
+                                </p>
+                                <span>
+                                  Duration:{" "}
+                                  {inProgress
+                                    ? "In progress"
+                                    : attempt.statusCode == null
+                                      ? "—"
+                                      : formatDuration(attempt.durationMs)}
+                                </span>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
+                        </div>
+                      );
+                    })}
+                </div>
+              ))
             )}
           </section>
         </>
@@ -963,12 +1035,14 @@ function Endpoints({
   setMode,
   viewDeliveries,
   newEvent,
+  openRecovery,
 }: {
   snapshot: Snapshot;
   busy: boolean;
   setMode: (endpointId: string, mode: ReceiverMode) => void;
   viewDeliveries: (id: string) => void;
   newEvent: (id: string) => void;
+  openRecovery: () => void;
 }) {
   const healthy = snapshot.endpoints.filter(
     (endpoint) => endpoint.mode === "healthy",
@@ -1010,21 +1084,30 @@ function Endpoints({
               </div>
               <div className="behavior-control">
                 <span className="control-label">Receiver behavior</span>
-                <div>
-                  {receiverModes.map((mode) => (
-                    <button
-                      key={mode}
-                      className={
-                        endpoint.mode === mode ? `active behavior-${mode}` : ""
-                      }
-                      aria-pressed={endpoint.mode === mode}
-                      disabled={busy}
-                      onClick={() => setMode(endpoint.id, mode)}
-                    >
-                      {capitalize(mode)}
-                    </button>
-                  ))}
-                </div>
+                {endpoint.purpose === "recovery" ? (
+                  <div className="managed-receiver-note">
+                    <Wrench size={17} />
+                    <span>Managed by the recovery guide</span>
+                  </div>
+                ) : (
+                  <div>
+                    {receiverModes.map((mode) => (
+                      <button
+                        key={mode}
+                        className={
+                          endpoint.mode === mode
+                            ? `active behavior-${mode}`
+                            : ""
+                        }
+                        aria-pressed={endpoint.mode === mode}
+                        disabled={busy}
+                        onClick={() => setMode(endpoint.id, mode)}
+                      >
+                        {capitalize(mode)}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <p>{modeDescriptions[endpoint.mode]}</p>
               </div>
               <div className="endpoint-stats">
@@ -1055,10 +1138,20 @@ function Endpoints({
                 </button>
                 <button
                   className="text-button"
-                  onClick={() => newEvent(endpoint.id)}
+                  onClick={() =>
+                    endpoint.purpose === "recovery"
+                      ? openRecovery()
+                      : newEvent(endpoint.id)
+                  }
                 >
-                  <Send size={14} />
-                  Send test
+                  {endpoint.purpose === "recovery" ? (
+                    <Wrench size={14} />
+                  ) : (
+                    <Send size={14} />
+                  )}
+                  {endpoint.purpose === "recovery"
+                    ? "Open recovery guide"
+                    : "Send test"}
                 </button>
               </div>
             </article>
@@ -1429,6 +1522,7 @@ export default function Home() {
   const [eventOpen, setEventOpen] = useState(false);
   const [eventDestination, setEventDestination] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [notices, setNotices] = useState<Notice[]>([]);
@@ -1557,6 +1651,43 @@ export default function Home() {
     },
     [authRequired, handleConnection, toast, updateSnapshot],
   );
+  const replayBatch = useCallback(
+    async (request: ReplayBatchRequest) => {
+      if (acting.current || authRequired) return null;
+      acting.current = true;
+      setBusy(true);
+      const job = queue.current.then(() =>
+        api<ReplayBatchResponse>("/api/recovery/replay", request),
+      );
+      queue.current = job.catch(() => undefined);
+      try {
+        const data = await job;
+        updateSnapshot(data.snapshot);
+        return data;
+      } catch (err) {
+        if (err instanceof RequestError && err.status === 401)
+          handleConnection(err);
+        toast(
+          err instanceof Error
+            ? err.message
+            : "The selected events could not be replayed.",
+          true,
+        );
+        return null;
+      } finally {
+        acting.current = false;
+        setBusy(false);
+      }
+    },
+    [authRequired, handleConnection, toast, updateSnapshot],
+  );
+  const handleRecoveryConnection = useCallback(
+    (err: unknown) => {
+      if (err instanceof RequestError && err.status === 401)
+        handleConnection(err);
+    },
+    [handleConnection],
+  );
   useEffect(() => {
     const timer = window.setTimeout(
       () => setDebouncedSearch(search.trim()),
@@ -1654,6 +1785,7 @@ export default function Home() {
         !(event.target instanceof HTMLSelectElement) &&
         !eventOpen &&
         !selected &&
+        !recoveryDialogOpen &&
         !mobileOpen
       ) {
         event.preventDefault();
@@ -1662,7 +1794,7 @@ export default function Home() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [eventOpen, selected, mobileOpen]);
+  }, [eventOpen, selected, mobileOpen, recoveryDialogOpen]);
   const go = (next: View) => {
     setView(next);
     setMobileOpen(false);
@@ -1750,9 +1882,17 @@ export default function Home() {
           ref={sidebarRef}
           className={`sidebar ${mobileOpen ? "is-open" : ""}`}
           id="workspace-navigation"
-          inert={Boolean((isMobile && !mobileOpen) || eventOpen || selected)}
+          inert={Boolean(
+            (isMobile && !mobileOpen) ||
+            eventOpen ||
+            selected ||
+            recoveryDialogOpen,
+          )}
           aria-hidden={
-            (isMobile && !mobileOpen) || eventOpen || selected
+            (isMobile && !mobileOpen) ||
+            eventOpen ||
+            selected ||
+            recoveryDialogOpen
               ? true
               : undefined
           }
@@ -1786,7 +1926,7 @@ export default function Home() {
           </div>
           <nav aria-label="Main navigation">
             <span className="nav-label">Workspace</span>
-            {navigation.slice(0, 4).map(({ name, icon: Icon }) => (
+            {navigation.slice(0, 5).map(({ name, icon: Icon }) => (
               <button
                 key={name}
                 className={`nav-item ${view === name ? "active" : ""}`}
@@ -1795,7 +1935,7 @@ export default function Home() {
               >
                 <Icon size={19} />
                 <span>{name}</span>
-                {name === "Deliveries" &&
+                {name === "Recovery" &&
                   snapshot &&
                   snapshot.metrics.dead > 0 && <b>{snapshot.metrics.dead}</b>}
               </button>
@@ -1869,7 +2009,12 @@ export default function Home() {
         </aside>
         <div
           className="main-column"
-          inert={Boolean((isMobile && mobileOpen) || eventOpen || selected)}
+          inert={Boolean(
+            (isMobile && mobileOpen) ||
+            eventOpen ||
+            selected ||
+            recoveryDialogOpen,
+          )}
         >
           <header className="topbar">
             <button
@@ -2220,6 +2365,19 @@ export default function Home() {
                       }
                       viewDeliveries={showEndpointDeliveries}
                       newEvent={createEvent}
+                      openRecovery={() => go("Recovery")}
+                    />
+                  )}
+                  {view === "Recovery" && (
+                    <RecoveryPanel
+                      snapshot={snapshot}
+                      busy={busy}
+                      act={act}
+                      replayBatch={replayBatch}
+                      load={loadRecoveryPage}
+                      connectionError={handleRecoveryConnection}
+                      inspect={setSelected}
+                      onDialogChange={setRecoveryDialogOpen}
                     />
                   )}
                   {view === "Activity" && (
@@ -2250,7 +2408,9 @@ export default function Home() {
           {eventOpen && snapshot && (
             <EventForm
               key={eventDestination || "event"}
-              endpoints={snapshot.endpoints}
+              endpoints={snapshot.endpoints.filter(
+                (endpoint) => endpoint.purpose === "standard",
+              )}
               initialEndpointId={eventDestination}
               onClose={closeEvent}
               send={(action) => act(action)}
@@ -2263,13 +2423,20 @@ export default function Home() {
               version={snapshot.system.now}
               maxAttempts={snapshot.system.maxAttempts}
               close={closeDetail}
-              replay={() =>
+              replay={(eventId, expectedCycle) =>
                 act(
-                  { type: "replay", eventId: selected },
+                  { type: "replay", eventId, expectedCycle },
                   "Original event replayed. Receiver effects are protected.",
                 )
               }
               busy={busy}
+              recoveryEndpointIds={snapshot.endpoints
+                .filter((endpoint) => endpoint.purpose === "recovery")
+                .map((endpoint) => endpoint.id)}
+              openRecovery={() => {
+                setSelected(null);
+                go("Recovery");
+              }}
               viewEndpoint={() => {
                 setSelected(null);
                 go("Endpoints");

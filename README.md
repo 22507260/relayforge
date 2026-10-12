@@ -4,15 +4,21 @@
 
 Send an event, make a receiver fail, inspect every attempt, and replay a delivery after recovery. RelayForge combines an animated operations dashboard with a persistent queue, idempotency, signed payloads, and explicit failure states.
 
+The Recovery workspace brings failed deliveries into one view. Select up to 20 records for a reviewed bulk replay, inspect separate replay cycles, or follow a persistent Recovery Lab scenario from four failed attempts to a successful recovery.
+
 This is a working portfolio MVP. Its receivers are controlled demonstrations. A standalone worker advances the persistent queue without a browser; dashboard requests provide a fallback when no recent worker heartbeat is observed. It makes reliability behavior inspectable without claiming to be a production delivery service.
 
 [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Interview guide](docs/INTERVIEW-GUIDE.md) · [Security](docs/SECURITY.md) · [Roadmap](docs/ROADMAP.md)
 
 ![RelayForge dashboard with persisted events, attempt metrics, and controlled receivers](docs/preview.jpg)
 
-[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg)
+[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg) · [Recovery workspace](docs/recovery-preview.jpg) · [Mobile recovery](docs/recovery-mobile-preview.jpg)
 
 ## Try the failure path
+
+For a guided demonstration, open **Recovery** and start the **Recovery Lab**. Its dedicated receiver fails until the event reaches dead state. Repair it, replay the same event, and inspect the initial delivery and replay histories alongside its single receiver effect. Progress survives reloads and sign-in. The guide uses real queue processing; run the worker or keep the visible dashboard open for request fallback.
+
+The guide owns its receiver settings and replay controls. It does not change existing receivers. After completion, run it again to create a new event while preserving the earlier history.
 
 1. Open the dashboard and run the demo scenario.
 2. Switch a receiver between healthy, flaky, failing, and timeout behavior.
@@ -36,6 +42,8 @@ The project gives you concrete questions to investigate: what happens when two p
 | Destination safety    | Only built-in receiver destinations are accepted                                     | Arbitrary external webhook URLs are unsupported                             |
 
 Replay retains the event ID, payload, and idempotency key. It resets the current attempt budget while preserving attempt history. Neither idempotency nor leasing provides exactly-once network delivery.
+
+Each tracked replay increments the delivery cycle. Attempts recorded before cycle tracking was introduced remain under **Legacy history**; their cycle boundaries are not inferred. Bulk replay includes the selected cycle as a concurrency guard, skips records that are no longer eligible, and commits each replay's state and audit together in one transaction. A database failure rolls back the whole batch.
 
 ## Stack
 
@@ -101,7 +109,7 @@ With the development server running, use a second terminal for the real HTTP smo
 npm run smoke
 ```
 
-It checks authentication, same-origin mutation protection, a persisted event and attempt, duplicate submission, and an idempotency conflict. It only accepts loopback URLs and creates its own test account. Each run adds one event to that account's workspace.
+It checks authentication, same-origin protection, account isolation, duplicate submissions, immutable replay cycles, paused bulk recovery, and the guided repair-to-delivery path. It only accepts loopback URLs and creates two test accounts, three events in the primary workspace, and one event in the isolation workspace. Run the worker alongside the web server; the check can also advance request fallback while polling its own test data.
 
 No throughput, availability, or latency benchmark is claimed. Dashboard durations describe controlled receiver attempts; they do not measure external network performance. Each workspace accepts up to 500 events. The overview snapshot returns the latest 100 deliveries; the delivery-history API pages through the workspace's full accepted history with server-side search, status, and endpoint filters.
 

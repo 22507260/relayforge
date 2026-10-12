@@ -63,6 +63,7 @@ export const endpoints = sqliteTable(
     description: text("description").notNull(),
     color: text("color").notNull(),
     mode: text("mode").notNull(),
+    purpose: text("purpose").notNull().default("standard"),
   },
   (table) => [index("endpoints_owner_idx").on(table.owner)],
 );
@@ -82,6 +83,7 @@ export const deliveries = sqliteTable(
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),
+    currentCycle: integer("current_cycle").notNull().default(1),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     nextAttemptAt: integer("next_attempt_at"),
@@ -112,6 +114,7 @@ export const attempts = sqliteTable(
       .notNull()
       .references(() => deliveries.id),
     number: integer("number").notNull(),
+    cycle: integer("cycle"),
     statusCode: integer("status_code"),
     error: text("error"),
     durationMs: integer("duration_ms").notNull().default(0),
@@ -131,6 +134,8 @@ export const activity = sqliteTable(
     eventId: text("event_id"),
     message: text("message").notNull(),
     createdAt: integer("created_at").notNull(),
+    cycle: integer("cycle"),
+    operationId: text("operation_id"),
   },
   (table) => [index("activity_owner_idx").on(table.owner, table.createdAt)],
 );
@@ -150,3 +155,18 @@ export const receiverEffects = sqliteTable(
     uniqueIndex("receiver_effects_event_idx").on(table.owner, table.eventId),
   ],
 );
+
+export const recoveryDemos = sqliteTable("recovery_demos", {
+  owner: text("owner")
+    .primaryKey()
+    .references(() => workspaces.owner),
+  endpointId: text("endpoint_id")
+    .notNull()
+    .references(() => endpoints.id),
+  eventId: text("event_id")
+    .notNull()
+    .references(() => deliveries.id),
+  previousEventId: text("previous_event_id"),
+  createdAt: integer("created_at").notNull(),
+  repairedAt: integer("repaired_at"),
+});

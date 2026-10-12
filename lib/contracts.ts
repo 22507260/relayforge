@@ -8,6 +8,7 @@ export interface Endpoint {
   description: string;
   color: string;
   mode: ReceiverMode;
+  purpose: "standard" | "recovery";
   deliveries: number;
   delivered: number;
   lastDurationMs: number | null;
@@ -20,11 +21,13 @@ export interface Delivery {
   endpointName: string;
   status: DeliveryStatus;
   attempts: number;
+  currentCycle: number;
   createdAt: number;
   updatedAt: number;
   nextAttemptAt: number | null;
   payload: string;
   latestAttempt: {
+    cycle: number | null;
     statusCode: number | null;
     durationMs: number | null;
     error: string | null;
@@ -53,6 +56,7 @@ export interface Attempt {
   id: string;
   eventId: string;
   number: number;
+  cycle: number | null;
   statusCode: number | null;
   error: string | null;
   durationMs: number;
@@ -73,6 +77,8 @@ export interface Activity {
   eventId: string | null;
   message: string;
   createdAt: number;
+  cycle: number | null;
+  operationId: string | null;
 }
 
 export interface Snapshot {
@@ -80,6 +86,7 @@ export interface Snapshot {
   endpoints: Endpoint[];
   deliveries: Delivery[];
   activity: Activity[];
+  recoveryDemo: RecoveryDemo | null;
   metrics: {
     total: number;
     delivered: number;
@@ -116,11 +123,49 @@ export type Action =
     }
   | { type: "demo" }
   | { type: "set-receiver"; endpointId: string; mode: ReceiverMode }
-  | { type: "replay"; eventId: string }
+  | { type: "replay"; eventId: string; expectedCycle?: number }
+  | { type: "start-recovery-demo"; previousEventId?: string }
+  | { type: "repair-recovery-demo"; eventId: string; expectedCycle: number }
+  | { type: "replay-recovery-demo"; eventId: string; expectedCycle: number }
   | { type: "pause"; paused: boolean }
   | { type: "pump" };
 
 export interface DeliveryDetail {
   delivery: Delivery;
   attempts: Attempt[];
+}
+
+export interface ReplaySelection {
+  eventId: string;
+  expectedCycle: number;
+}
+
+export interface ReplayBatchRequest {
+  items: ReplaySelection[];
+}
+
+export interface ReplayBatchResult {
+  eventId: string;
+  outcome: "replayed" | "skipped";
+  currentCycle: number | null;
+}
+
+export interface ReplayBatchResponse {
+  results: ReplayBatchResult[];
+  snapshot: Snapshot;
+}
+
+export interface RecoveryDemo {
+  eventId: string;
+  endpointId: string;
+  createdAt: number;
+  repairedAt: number | null;
+  stage:
+    | "failing"
+    | "awaiting-repair"
+    | "ready-to-replay"
+    | "recovering"
+    | "completed";
+  delivery: Delivery;
+  businessEffects: number;
 }
