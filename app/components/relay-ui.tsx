@@ -365,7 +365,9 @@ export function DeliveryTable({
   expanded = false,
   loading = false,
   emptyAction,
+  hrefForEvent,
 }: {
+  hrefForEvent?: (id: string) => string;
   rows: Delivery[];
   onSelect: (id: string) => void;
   now: number;
@@ -426,13 +428,36 @@ export function DeliveryTable({
                 {rows.map((delivery) => (
                   <tr key={delivery.id} onClick={() => onSelect(delivery.id)}>
                     <td>
-                      <button
-                        className="event-cell"
-                        onClick={() => onSelect(delivery.id)}
-                      >
-                        <strong>{delivery.eventType}</strong>
-                        <code>{delivery.id.slice(0, 18)}</code>
-                      </button>
+                      {hrefForEvent ? (
+                        <a
+                          className="event-cell"
+                          href={hrefForEvent(delivery.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (
+                              event.button !== 0 ||
+                              event.metaKey ||
+                              event.ctrlKey ||
+                              event.shiftKey ||
+                              event.altKey
+                            )
+                              return;
+                            event.preventDefault();
+                            onSelect(delivery.id);
+                          }}
+                        >
+                          <strong>{delivery.eventType}</strong>
+                          <code>{delivery.id.slice(0, 18)}</code>
+                        </a>
+                      ) : (
+                        <button
+                          className="event-cell"
+                          onClick={() => onSelect(delivery.id)}
+                        >
+                          <strong>{delivery.eventType}</strong>
+                          <code>{delivery.id.slice(0, 18)}</code>
+                        </button>
+                      )}
                     </td>
                     <td>
                       <span className="target-cell">
@@ -488,10 +513,25 @@ export function DeliveryTable({
           </div>
           <div className="delivery-cards">
             {rows.map((delivery) => (
-              <button
+              <a
                 className="delivery-card"
                 key={delivery.id}
-                onClick={() => onSelect(delivery.id)}
+                href={
+                  hrefForEvent?.(delivery.id) ??
+                  `/?view=deliveries&event=${encodeURIComponent(delivery.id)}`
+                }
+                onClick={(event) => {
+                  if (
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  onSelect(delivery.id);
+                }}
               >
                 <span className="card-top">
                   <span className="event-cell">
@@ -534,7 +574,7 @@ export function DeliveryTable({
                     <ChevronRight size={15} />
                   </span>
                 )}
-              </button>
+              </a>
             ))}
           </div>
         </>

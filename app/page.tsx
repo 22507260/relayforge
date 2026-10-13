@@ -13,7 +13,6 @@ import {
   Code2,
   Copy,
   Database,
-  GitBranch,
   Layers3,
   LayoutDashboard,
   LoaderCircle,
@@ -43,15 +42,17 @@ import {
 } from "react";
 import type {
   Action,
-  Activity,
   DeliveryDetail,
   DeliveryPage,
-  DeliveryStatus,
   Endpoint,
   ReceiverMode,
   ReplayBatchRequest,
   ReplayBatchResponse,
   Snapshot,
+  SecurityAction,
+  SecuritySnapshot,
+  SecurityMutationResponse,
+  AuditPage,
 } from "@/lib/contracts";
 import {
   Button,
@@ -73,6 +74,15 @@ import {
   ViewAll,
 } from "./components/relay-ui";
 import { RecoveryPanel } from "./components/recovery-panel";
+import { SecurityCenter } from "./components/security-center";
+import { AuditExplorer } from "./components/audit-explorer";
+import {
+  navigationForView,
+  parseNavigation,
+  serializeNavigation,
+  type NavigationState,
+  type NavigationView,
+} from "@/lib/navigation";
 
 type View =
   | "Overview"
@@ -80,8 +90,8 @@ type View =
   | "Recovery"
   | "Endpoints"
   | "Activity"
-  | "Engineering";
-type StatusFilter = "all" | DeliveryStatus;
+  | "Engineering"
+  | "Security";
 type Notice = { id: number; message: string; error?: boolean };
 const navigation = [
   { name: "Overview", icon: LayoutDashboard },
@@ -89,6 +99,7 @@ const navigation = [
   { name: "Recovery", icon: Wrench },
   { name: "Endpoints", icon: Webhook },
   { name: "Activity", icon: ActivityIcon },
+  { name: "Security", icon: ShieldCheck },
   { name: "Engineering", icon: Code2 },
 ] as const;
 const receiverModes: ReceiverMode[] = [
@@ -105,16 +116,6 @@ const modeDescriptions: Record<ReceiverMode, string> = {
 };
 const capitalize = (value: string) =>
   value.charAt(0).toUpperCase() + value.slice(1);
-const titleForActivity: Record<Activity["kind"], string> = {
-  accepted: "Event accepted",
-  delivered: "Delivery acknowledged",
-  retry: "Retry scheduled",
-  dead: "Attempts exhausted",
-  replay: "Event replayed",
-  duplicate: "Duplicate prevented",
-  system: "Engine configuration",
-};
-
 class RequestError extends Error {
   constructor(
     message: string,
@@ -126,10 +127,14 @@ class RequestError extends Error {
 
 const loadRecoveryPage = (query: string, signal: AbortSignal) =>
   api<DeliveryPage>(`/api/deliveries?${query}`, undefined, signal);
+const loadSecurity = (signal: AbortSignal) =>
+  api<SecuritySnapshot>("/api/security", undefined, signal);
+const loadAudit = (query: string, signal: AbortSignal) =>
+  api<AuditPage>(`/api/audit?${query}`, undefined, signal);
 
 async function api<T>(
   url: string,
-  action?: Action | ReplayBatchRequest,
+  action?: Action | ReplayBatchRequest | SecurityAction,
   signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch(
@@ -162,7 +167,7 @@ async function api<T>(
       : "The request could not be completed. Please try again.";
   if (!response.ok)
     throw new RequestError(
-      response.status === 401
+      response.status === 401 && message !== "Current password is incorrect."
         ? "Your session has ended. Sign in to continue."
         : message,
       response.status,
@@ -403,7 +408,9 @@ function DeliveryDrawer({
   openRecovery,
   busy,
   copy,
+  href,
 }: {
+  href: string;
   id: string;
   version: number;
   maxAttempts: number;
@@ -532,6 +539,15 @@ function DeliveryDrawer({
             </time>
           </div>
           <div className="drawer-actions">
+            <a
+              href={href}
+              className="button button-secondary"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ArrowRight size={15} />
+              Open event link
+            </a>
             {managed ? (
               <Button onClick={openRecovery}>
                 <Wrench size={16} /> Open recovery guide
@@ -779,7 +795,9 @@ function Overview({
   busy,
   go,
   select,
+  hrefForEvent,
 }: {
+  hrefForEvent: (id: string) => string;
   snapshot: Snapshot;
   demo: () => void;
   busy: boolean;
@@ -985,6 +1003,7 @@ function Overview({
         <DeliveryTable
           rows={latest}
           onSelect={select}
+          hrefForEvent={hrefForEvent}
           now={snapshot.system.now}
           maxAttempts={snapshot.system.maxAttempts}
           emptyAction={
@@ -1169,120 +1188,6 @@ function Endpoints({
           </p>
         </div>
       </div>
-    </>
-  );
-}
-
-function ActivityView({
-  snapshot,
-  select,
-}: {
-  snapshot: Snapshot;
-  select: (id: string) => void;
-}) {
-  const [filter, setFilter] = useState("all");
-  const filtered = snapshot.activity.filter(
-    (item) =>
-      filter === "all" ||
-      (filter === "system"
-        ? item.kind === "system"
-        : filter === "failures"
-          ? item.kind === "retry" || item.kind === "dead"
-          : item.kind !== "system"),
-  );
-  let previousDay = "";
-  return (
-    <>
-      <PageHeader
-        eyebrow="AUDIT LOG"
-        title="Activity"
-        description="A recorded history of acceptance, delivery, retries, and engine changes."
-      />
-      <div className="toolbar">
-        <div className="filter-tabs">
-          {[
-            { id: "all", label: "All activity" },
-            { id: "deliveries", label: "Events" },
-            { id: "failures", label: "Failures & retries" },
-            { id: "system", label: "Engine changes" },
-          ].map((item) => (
-            <button
-              key={item.id}
-              className={filter === item.id ? "active" : ""}
-              aria-pressed={filter === item.id}
-              onClick={() => setFilter(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <span className="toolbar-note">
-          Latest {snapshot.activity.length} records · local time
-        </span>
-      </div>
-      <section className="panel activity-list">
-        {!filtered.length ? (
-          <EmptyState
-            title="No activity here yet"
-            description="Send an event or choose another activity filter."
-          />
-        ) : (
-          filtered.map((item) => {
-            const day = new Date(item.createdAt).toLocaleDateString("en-GB", {
-              weekday: "long",
-              month: "short",
-              day: "numeric",
-            });
-            const heading = day !== previousDay;
-            previousDay = day;
-            return (
-              <div key={item.id}>
-                {heading && (
-                  <div className="activity-day">
-                    {day}
-                    <span />
-                  </div>
-                )}
-                <div className="activity-item">
-                  <span
-                    className={`activity-icon ${item.kind === "delivered" || item.kind === "accepted" ? "green" : item.kind === "dead" || item.kind === "retry" ? "amber" : item.kind === "system" ? "purple" : "blue"}`}
-                  >
-                    {item.kind === "delivered" ? (
-                      <Check size={18} />
-                    ) : item.kind === "retry" || item.kind === "replay" ? (
-                      <RotateCcw size={18} />
-                    ) : item.kind === "duplicate" ? (
-                      <ShieldCheck size={18} />
-                    ) : item.kind === "dead" ? (
-                      <X size={18} />
-                    ) : item.kind === "system" ? (
-                      <GitBranch size={18} />
-                    ) : (
-                      <Zap size={18} />
-                    )}
-                  </span>
-                  <div>
-                    <strong>{titleForActivity[item.kind]}</strong>
-                    <p>{item.message}</p>
-                    {item.eventId && (
-                      <button
-                        className="activity-event-link"
-                        onClick={() => select(item.eventId!)}
-                      >
-                        {item.eventId.slice(0, 22)}
-                        <ArrowRight size={13} />
-                      </button>
-                    )}
-                  </div>
-                  <time title={fullDate(item.createdAt)}>
-                    {relativeTime(item.createdAt, snapshot.system.now)}
-                  </time>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </section>
     </>
   );
 }
@@ -1501,17 +1406,71 @@ function Engineering({
 export default function Home() {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [view, setView] = useState<View>("Overview");
+  const [urlState, setUrlState] = useState<NavigationState>(() =>
+    navigationForView(),
+  );
+  const navigationRef = useRef(urlState);
+  const changeNavigation = useCallback(
+    (patch: Partial<NavigationState>, replace = false) => {
+      const next = parseNavigation(
+        serializeNavigation({ ...navigationRef.current, ...patch }).slice(2),
+      );
+      const destination = serializeNavigation(next);
+      navigationRef.current = next;
+      setUrlState(next);
+      if (
+        `${window.location.pathname}${window.location.search}` !== destination
+      ) {
+        if (replace) window.history.replaceState(null, "", destination);
+        else window.history.pushState(null, "", destination);
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    const restore = () => {
+      const next = parseNavigation(window.location.search);
+      navigationRef.current = next;
+      setUrlState(next);
+      const destination = serializeNavigation(next);
+      if (
+        `${window.location.pathname}${window.location.search}` !== destination
+      )
+        window.history.replaceState(null, "", destination);
+    };
+    restore();
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
+  const view = capitalize(urlState.view) as View;
+  const page = urlState.page;
+  const pageSize = urlState.size;
+  const status = urlState.status;
+  const endpointFilter = urlState.endpoint;
+  const selected = urlState.event;
+  const setSelected = useCallback(
+    (event: string | null) => changeNavigation({ event }),
+    [changeNavigation],
+  );
+  const hrefForEvent = useCallback(
+    (event: string) => serializeNavigation({ ...urlState, event }),
+    [urlState],
+  );
+  const setPage = useCallback(
+    (page: number) => changeNavigation({ page }),
+    [changeNavigation],
+  );
   const [connectionError, setConnectionError] = useState("");
   const [authRequired, setAuthRequired] = useState(false);
   const [busy, setBusy] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [endpointFilter, setEndpointFilter] = useState("all");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const searchKey = `${urlState.view}:${urlState.q}`;
+  const [searchSource, setSearchSource] = useState(searchKey);
+  if (searchSource !== searchKey) {
+    setSearchSource(searchKey);
+    setSearch(urlState.q);
+  }
   const [deliveryResult, setDeliveryResult] = useState<{
     query: string;
     retry: number;
@@ -1521,7 +1480,6 @@ export default function Home() {
   const [listRetry, setListRetry] = useState(0);
   const [eventOpen, setEventOpen] = useState(false);
   const [eventDestination, setEventDestination] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -1538,7 +1496,7 @@ export default function Home() {
   const deliveryQuery = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
-    search: debouncedSearch,
+    search: urlState.q,
     status,
     endpointId: endpointFilter,
   }).toString();
@@ -1681,6 +1639,33 @@ export default function Home() {
     },
     [authRequired, handleConnection, toast, updateSnapshot],
   );
+  const securityMutate = useCallback(
+    async (action: SecurityAction): Promise<SecurityMutationResponse> => {
+      if (acting.current || authRequired)
+        throw new Error("Please wait for the current action to finish.");
+      acting.current = true;
+      setBusy(true);
+      const job = queue.current.then(() =>
+        api<SecurityMutationResponse>("/api/security", action),
+      );
+      queue.current = job.catch(() => undefined);
+      try {
+        return await job;
+      } catch (error) {
+        if (
+          error instanceof RequestError &&
+          error.status === 401 &&
+          error.message !== "Current password is incorrect."
+        )
+          handleConnection(error);
+        throw error;
+      } finally {
+        acting.current = false;
+        setBusy(false);
+      }
+    },
+    [authRequired, handleConnection],
+  );
   const handleRecoveryConnection = useCallback(
     (err: unknown) => {
       if (err instanceof RequestError && err.status === 401)
@@ -1689,12 +1674,13 @@ export default function Home() {
     [handleConnection],
   );
   useEffect(() => {
+    if (view !== "Deliveries" || search.trim() === urlState.q) return;
     const timer = window.setTimeout(
-      () => setDebouncedSearch(search.trim()),
+      () => changeNavigation({ q: search.trim(), page: 1 }, true),
       250,
     );
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [search, view, urlState.q, changeNavigation]);
   useEffect(() => {
     if (view !== "Deliveries" || !snapshot || authRequired) return;
     const controller = new AbortController();
@@ -1735,6 +1721,7 @@ export default function Home() {
     deliveryQuery,
     listRetry,
     handleConnection,
+    setPage,
   ]);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 980px)");
@@ -1796,29 +1783,18 @@ export default function Home() {
     return () => document.removeEventListener("keydown", handler);
   }, [eventOpen, selected, mobileOpen, recoveryDialogOpen]);
   const go = (next: View) => {
-    setView(next);
+    changeNavigation(navigationForView(next.toLowerCase() as NavigationView));
     setMobileOpen(false);
-    if (next !== "Deliveries") {
-      setSearch("");
-      setStatus("all");
-      setEndpointFilter("all");
-      setPage(1);
-    }
   };
   const showEndpointDeliveries = (id: string) => {
-    setSelected(null);
-    setEndpointFilter(id);
-    setStatus("all");
-    setSearch("");
-    setPage(1);
-    setView("Deliveries");
+    changeNavigation({ ...navigationForView("deliveries"), endpoint: id });
     setMobileOpen(false);
   };
   const closeEvent = useCallback(() => {
     setEventOpen(false);
     setEventDestination(null);
   }, []);
-  const closeDetail = useCallback(() => setSelected(null), []);
+  const closeDetail = useCallback(() => setSelected(null), [setSelected]);
   const createEvent = (id?: string) => {
     setEventDestination(id || null);
     setEventOpen(true);
@@ -1863,6 +1839,9 @@ export default function Home() {
     !search &&
     status === "all" &&
     endpointFilter === "all";
+  const hasModal = Boolean(
+    snapshot && !authRequired && (eventOpen || selected || recoveryDialogOpen),
+  );
   return (
     <MotionConfig reducedMotion="user">
       <div className="app-shell">
@@ -1882,20 +1861,8 @@ export default function Home() {
           ref={sidebarRef}
           className={`sidebar ${mobileOpen ? "is-open" : ""}`}
           id="workspace-navigation"
-          inert={Boolean(
-            (isMobile && !mobileOpen) ||
-            eventOpen ||
-            selected ||
-            recoveryDialogOpen,
-          )}
-          aria-hidden={
-            (isMobile && !mobileOpen) ||
-            eventOpen ||
-            selected ||
-            recoveryDialogOpen
-              ? true
-              : undefined
-          }
+          inert={Boolean((isMobile && !mobileOpen) || hasModal)}
+          aria-hidden={(isMobile && !mobileOpen) || hasModal ? true : undefined}
           role={isMobile && mobileOpen ? "dialog" : undefined}
           aria-modal={isMobile && mobileOpen ? true : undefined}
           aria-label="Workspace navigation"
@@ -1926,7 +1893,7 @@ export default function Home() {
           </div>
           <nav aria-label="Main navigation">
             <span className="nav-label">Workspace</span>
-            {navigation.slice(0, 5).map(({ name, icon: Icon }) => (
+            {navigation.slice(0, 6).map(({ name, icon: Icon }) => (
               <button
                 key={name}
                 className={`nav-item ${view === name ? "active" : ""}`}
@@ -2009,12 +1976,7 @@ export default function Home() {
         </aside>
         <div
           className="main-column"
-          inert={Boolean(
-            (isMobile && mobileOpen) ||
-            eventOpen ||
-            selected ||
-            recoveryDialogOpen,
-          )}
+          inert={Boolean((isMobile && mobileOpen) || hasModal)}
         >
           <header className="topbar">
             <button
@@ -2038,13 +2000,13 @@ export default function Home() {
                 value={search}
                 maxLength={100}
                 onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                  if (view !== "Deliveries") {
-                    setView("Deliveries");
-                    setStatus("all");
-                    setEndpointFilter("all");
-                  }
+                  const value = event.target.value;
+                  if (view !== "Deliveries")
+                    changeNavigation(
+                      { ...navigationForView("deliveries"), q: value },
+                      true,
+                    );
+                  setSearch(value);
                 }}
                 placeholder="Search events, IDs, endpoints…"
                 aria-label="Search deliveries"
@@ -2092,7 +2054,7 @@ export default function Home() {
                 {authRequired ? (
                   <a
                     className="button button-secondary"
-                    href="/login?returnTo=%2F"
+                    href={`/login?returnTo=${encodeURIComponent(serializeNavigation(urlState))}`}
                   >
                     Sign in
                     <ArrowRight size={15} />
@@ -2108,7 +2070,7 @@ export default function Home() {
                 )}
               </div>
             )}
-            {!snapshot ? (
+            {!snapshot || authRequired ? (
               <div className="workspace-loading">
                 <Logo />
                 <h1>
@@ -2130,7 +2092,7 @@ export default function Home() {
                 )}
                 {authRequired && (
                   <a
-                    href="/login?returnTo=%2F"
+                    href={`/login?returnTo=${encodeURIComponent(serializeNavigation(urlState))}`}
                     className="button button-primary"
                   >
                     Sign in to RelayForge
@@ -2181,6 +2143,7 @@ export default function Home() {
                       busy={busy}
                       go={go}
                       select={setSelected}
+                      hrefForEvent={hrefForEvent}
                     />
                   )}
                   {view === "Deliveries" && (
@@ -2222,7 +2185,6 @@ export default function Home() {
                             value={search}
                             onChange={(event) => {
                               setSearch(event.target.value);
-                              setPage(1);
                             }}
                             placeholder="Search event type or ID…"
                             aria-label="Filter deliveries by event, ID or endpoint"
@@ -2242,8 +2204,10 @@ export default function Home() {
                               className={status === item.id ? "active" : ""}
                               aria-pressed={status === item.id}
                               onClick={() => {
-                                setStatus(item.id as StatusFilter);
-                                setPage(1);
+                                changeNavigation({
+                                  status: item.id as NavigationState["status"],
+                                  page: 1,
+                                });
                               }}
                             >
                               {item.label}
@@ -2257,8 +2221,10 @@ export default function Home() {
                           <select
                             value={endpointFilter}
                             onChange={(event) => {
-                              setEndpointFilter(event.target.value);
-                              setPage(1);
+                              changeNavigation({
+                                endpoint: event.target.value,
+                                page: 1,
+                              });
                             }}
                           >
                             <option value="all">All endpoints</option>
@@ -2298,8 +2264,10 @@ export default function Home() {
                                 value={pageSize}
                                 aria-label="Deliveries per page"
                                 onChange={(event) => {
-                                  setPageSize(Number(event.target.value));
-                                  setPage(1);
+                                  changeNavigation({
+                                    size: Number(event.target.value),
+                                    page: 1,
+                                  });
                                 }}
                               >
                                 <option value={10}>10</option>
@@ -2319,6 +2287,7 @@ export default function Home() {
                           <DeliveryTable
                             rows={pageRows}
                             onSelect={setSelected}
+                            hrefForEvent={hrefForEvent}
                             now={snapshot.system.now}
                             maxAttempts={snapshot.system.maxAttempts}
                             expanded
@@ -2378,10 +2347,40 @@ export default function Home() {
                       connectionError={handleRecoveryConnection}
                       inspect={setSelected}
                       onDialogChange={setRecoveryDialogOpen}
+                      navigation={urlState}
+                      change={changeNavigation}
                     />
                   )}
                   {view === "Activity" && (
-                    <ActivityView snapshot={snapshot} select={setSelected} />
+                    <AuditExplorer
+                      navigation={urlState}
+                      change={changeNavigation}
+                      now={snapshot.system.now}
+                      load={loadAudit}
+                      connectionError={handleRecoveryConnection}
+                      inspect={setSelected}
+                      hrefForEvent={hrefForEvent}
+                    />
+                  )}
+                  {view === "Security" && (
+                    <SecurityCenter
+                      busy={busy}
+                      version={snapshot.system.now}
+                      load={loadSecurity}
+                      mutate={securityMutate}
+                      connectionError={handleRecoveryConnection}
+                      onDialogChange={setRecoveryDialogOpen}
+                      activityHref={serializeNavigation({
+                        ...navigationForView("activity"),
+                        category: "security",
+                      })}
+                      openActivity={() =>
+                        changeNavigation({
+                          ...navigationForView("activity"),
+                          category: "security",
+                        })
+                      }
+                    />
                   )}
                   {view === "Engineering" && (
                     <Engineering snapshot={snapshot} copy={copy} />
@@ -2405,7 +2404,7 @@ export default function Home() {
           </main>
         </div>
         <AnimatePresence>
-          {eventOpen && snapshot && (
+          {eventOpen && snapshot && !authRequired && (
             <EventForm
               key={eventDestination || "event"}
               endpoints={snapshot.endpoints.filter(
@@ -2417,7 +2416,7 @@ export default function Home() {
               busy={busy}
             />
           )}
-          {selected && snapshot && (
+          {selected && snapshot && !authRequired && (
             <DeliveryDrawer
               id={selected}
               version={snapshot.system.now}
@@ -2434,14 +2433,13 @@ export default function Home() {
                 .filter((endpoint) => endpoint.purpose === "recovery")
                 .map((endpoint) => endpoint.id)}
               openRecovery={() => {
-                setSelected(null);
                 go("Recovery");
               }}
               viewEndpoint={() => {
-                setSelected(null);
                 go("Endpoints");
               }}
               copy={copy}
+              href={hrefForEvent(selected)}
             />
           )}
         </AnimatePresence>

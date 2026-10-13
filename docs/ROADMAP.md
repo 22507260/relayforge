@@ -10,10 +10,12 @@ The current version is a working portfolio MVP: a persistent queue, a standalone
 - The application manages accounts and sessions. Email verification, password recovery, and public-deployment abuse controls remain future work.
 - Signing secrets are stored in the demo database; encryption and rotation are not implemented.
 - Unit tests alone cannot establish production database race behavior or crash recovery.
-- Workspaces accept up to 500 events; snapshots expose the latest 100 deliveries and 30 activities. Delivery history supports pagination and server-side filtering, but retention policies and larger workspace capacity remain future work.
+- Workspaces accept up to 500 events; overview snapshots expose the latest 100 deliveries and 30 activities. Separate delivery-history and unified audit APIs support full-history pagination and server-side filtering. Retention policies and larger workspace capacity remain future work.
 - Attempts recorded before cycle tracking remain in Legacy history; their original cycle boundaries cannot be reconstructed reliably.
 - There is no published load benchmark, SLA, billing system, or production incident record.
 - No exactly-once network delivery guarantee is made.
+
+The current account controls include active-session inspection, other-session revocation, verified password changes, and a unified security/delivery audit explorer. Dashboard views, filters, pagination, and event drawers have canonical URLs. These implemented controls do not provide email verification, forgotten-password recovery, or a reviewed public-service abuse policy.
 
 ## 1. Autonomous processing — implementation and verification
 

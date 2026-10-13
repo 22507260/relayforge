@@ -4,6 +4,8 @@ import type {
   Action,
   DeliveryQuery,
   ReplayBatchRequest,
+  AuditQuery,
+  SecurityAction,
 } from "../contracts.ts";
 
 const object = z.record(z.unknown());
@@ -97,6 +99,111 @@ const deliveryQuerySchema = z
     endpointId: z.union([z.literal("all"), identifier]).default("all"),
   })
   .strict();
+
+const auditKinds = [
+  "all",
+  "accepted",
+  "delivered",
+  "retry",
+  "dead",
+  "replay",
+  "duplicate",
+  "system",
+  "registered",
+  "signed-in",
+  "sign-in-failed",
+  "signed-out",
+  "session-revoked",
+  "other-sessions-revoked",
+  "password-changed",
+] as const;
+const timestamp = z
+  .string()
+  .regex(/^(0|[1-9]\d*)$/)
+  .transform(Number)
+  .pipe(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const auditQuerySchema = z
+  .object({
+    page: positiveInteger(500).default("1"),
+    pageSize: positiveInteger(50).default("20"),
+    search: z.string().trim().max(100).default(""),
+    category: z.enum(["all", "delivery", "security"]).default("all"),
+    kind: z.enum(auditKinds).default("all"),
+    eventId: z.union([z.literal("all"), identifier]).default("all"),
+    operationId: z.union([z.literal("all"), identifier]).default("all"),
+    from: timestamp.optional(),
+    to: timestamp.optional(),
+  })
+  .strict()
+  .refine(
+    (query) =>
+      query.from === undefined ||
+      query.to === undefined ||
+      query.from <= query.to,
+  );
+
+const securityActionSchema = z
+  .discriminatedUnion("type", [
+    z
+      .object({ type: z.literal("revoke-session"), sessionId: identifier })
+      .strict(),
+    z.object({ type: z.literal("revoke-other-sessions") }).strict(),
+    z
+      .object({
+        type: z.literal("change-password"),
+        currentPassword: z.string().min(1).max(128),
+        newPassword: z.string().min(12).max(128),
+      })
+      .strict(),
+  ])
+  .refine(
+    (action) =>
+      action.type !== "change-password" ||
+      action.currentPassword !== action.newPassword,
+  );
+
+export function validateSecurityAction(value: unknown): SecurityAction {
+  const parsed = securityActionSchema.safeParse(value);
+  if (!parsed.success)
+    throw new ApiError(
+      400,
+      "Invalid security action. Use a different new password between 12 and 128 characters.",
+    );
+  return parsed.data;
+}
+
+export async function parseSecurityAction(
+  request: Request,
+): Promise<SecurityAction> {
+  const body = await readBody(request);
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new ApiError(400, "Invalid JSON.");
+  }
+  return validateSecurityAction(value);
+}
+
+export function parseAuditQuery(request: Request): AuditQuery {
+  const values: Record<string, string> = {};
+  for (const [key, value] of new URL(request.url).searchParams) {
+    if (Object.hasOwn(values, key))
+      throw new ApiError(400, "Duplicate query parameters are not allowed.");
+    Object.defineProperty(values, key, { value, enumerable: true });
+  }
+  const parsed = auditQuerySchema.safeParse(values);
+  if (!parsed.success)
+    throw new ApiError(
+      400,
+      "Invalid audit filters. Check the page, category, kind, identifiers and dates.",
+    );
+  return {
+    ...parsed.data,
+    from: parsed.data.from ?? null,
+    to: parsed.data.to ?? null,
+  };
+}
 
 export function parseDeliveryQuery(request: Request): DeliveryQuery {
   const params = new URL(request.url).searchParams;

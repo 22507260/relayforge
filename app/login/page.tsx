@@ -15,14 +15,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import "./login.css";
+import { safeReturnTo } from "@/lib/navigation";
 
 function returnDestination() {
   const target = new URLSearchParams(window.location.search).get("returnTo");
-  if (!target || !target.startsWith("/")) return "/";
-  const url = new URL(target, window.location.origin);
-  if (url.origin !== window.location.origin || url.pathname === "/login")
-    return "/";
-  return `${url.pathname}${url.search}${url.hash}`;
+  return safeReturnTo(target, window.location.origin);
 }
 
 function Logo() {

@@ -27,6 +27,7 @@ import type {
   ReplayBatchResponse,
   Snapshot,
 } from "@/lib/contracts";
+import type { NavigationState } from "@/lib/navigation";
 import {
   Button,
   CloseButton,
@@ -65,7 +66,11 @@ export function RecoveryPanel({
   connectionError,
   inspect,
   onDialogChange,
+  navigation,
+  change,
 }: {
+  navigation: NavigationState;
+  change: (patch: Partial<NavigationState>, replace?: boolean) => void;
   snapshot: Snapshot;
   busy: boolean;
   act: (action: Action, message?: string) => Promise<boolean>;
@@ -77,11 +82,15 @@ export function RecoveryPanel({
   inspect: (id: string) => void;
   onDialogChange: (open: boolean) => void;
 }) {
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [endpointId, setEndpointId] = useState("all");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [search, setSearch] = useState(navigation.q);
+  const [searchSource, setSearchSource] = useState(navigation.q);
+  if (searchSource !== navigation.q) {
+    setSearchSource(navigation.q);
+    setSearch(navigation.q);
+  }
+  const endpointId = navigation.endpoint;
+  const page = navigation.page;
+  const pageSize = navigation.size;
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<{
     query: string;
@@ -102,7 +111,7 @@ export function RecoveryPanel({
   const query = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize),
-    search: debouncedSearch,
+    search: navigation.q,
     status: "dead",
     endpointId,
   }).toString();
@@ -135,12 +144,13 @@ export function RecoveryPanel({
     );
 
   useEffect(() => {
+    if (search.trim() === navigation.q) return;
     const timer = window.setTimeout(
-      () => setDebouncedSearch(search.trim()),
+      () => change({ q: search.trim(), page: 1 }, true),
       250,
     );
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [search, navigation.q, change]);
   useEffect(() => {
     const controller = new AbortController();
     load(query, controller.signal)
@@ -148,7 +158,7 @@ export function RecoveryPanel({
         if (controller.signal.aborted) return;
         setResult({ query, retry, data, error: "" });
         if (page > data.totalPages && data.totalPages > 0)
-          setPage(data.totalPages);
+          change({ page: data.totalPages }, true);
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -164,7 +174,7 @@ export function RecoveryPanel({
         connectionError(error);
       });
     return () => controller.abort();
-  }, [query, page, retry, snapshot, load, connectionError]);
+  }, [query, page, retry, snapshot, load, connectionError, change]);
   useEffect(() => {
     onDialogChange(Boolean(confirmation));
     return () => onDialogChange(false);
@@ -465,7 +475,6 @@ export function RecoveryPanel({
             maxLength={100}
             onChange={(event) => {
               setSearch(event.target.value);
-              setPage(1);
             }}
             placeholder="Search event type or ID…"
             aria-label="Search failed deliveries"
@@ -476,8 +485,7 @@ export function RecoveryPanel({
           <select
             value={endpointId}
             onChange={(event) => {
-              setEndpointId(event.target.value);
-              setPage(1);
+              change({ endpoint: event.target.value, page: 1 });
             }}
           >
             <option value="all">All endpoints</option>
@@ -572,8 +580,7 @@ export function RecoveryPanel({
                   value={pageSize}
                   aria-label="Failed deliveries per page"
                   onChange={(event) => {
-                    setPageSize(Number(event.target.value));
-                    setPage(1);
+                    change({ size: Number(event.target.value), page: 1 });
                   }}
                 >
                   <option value={10}>10</option>
@@ -748,7 +755,7 @@ export function RecoveryPanel({
         total={current?.data?.total ?? 0}
         totalPages={current?.data?.totalPages ?? 1}
         loading={loading}
-        onPage={setPage}
+        onPage={(page) => change({ page })}
       />
       <div className="recovery-footnote">
         <CircleHelp size={15} />

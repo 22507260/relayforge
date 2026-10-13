@@ -6,13 +6,15 @@ Send an event, make a receiver fail, inspect every attempt, and replay a deliver
 
 The Recovery workspace brings failed deliveries into one view. Select up to 20 records for a reviewed bulk replay, inspect separate replay cycles, or follow a persistent Recovery Lab scenario from four failed attempts to a successful recovery.
 
+The Security workspace shows active sessions, lets you revoke other sessions, and changes your password after checking the current one. Activity searches the complete account-owned delivery and security audit history. Navigation, filters, pagination, and event drawers have shareable URLs that survive reloads and browser history navigation.
+
 This is a working portfolio MVP. Its receivers are controlled demonstrations. A standalone worker advances the persistent queue without a browser; dashboard requests provide a fallback when no recent worker heartbeat is observed. It makes reliability behavior inspectable without claiming to be a production delivery service.
 
 [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Interview guide](docs/INTERVIEW-GUIDE.md) · [Security](docs/SECURITY.md) · [Roadmap](docs/ROADMAP.md)
 
 ![RelayForge dashboard with persisted events, attempt metrics, and controlled receivers](docs/preview.jpg)
 
-[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg) · [Recovery workspace](docs/recovery-preview.jpg) · [Mobile recovery](docs/recovery-mobile-preview.jpg)
+[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg) · [Recovery workspace](docs/recovery-preview.jpg) · [Mobile recovery](docs/recovery-mobile-preview.jpg) · [Security workspace](docs/security-preview.jpg) · [Audit explorer](docs/audit-preview.jpg) · [Mobile security](docs/security-mobile-preview.jpg)
 
 ## Try the failure path
 
@@ -30,16 +32,18 @@ The project gives you concrete questions to investigate: what happens when two p
 
 ## Engineering decisions
 
-| Concern               | Implemented approach                                                                 | Boundary                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Durable state         | SQLite stores deliveries and attempts; a standalone worker processes due work        | Autonomous progress requires a running worker with access to the database   |
-| Duplicate submissions | A unique key scoped to tenant and endpoint identifies an accepted event              | A reused key with a different payload or event type returns `409`           |
-| Competing processors  | Atomic lease claims and token-checked completion                                     | An expired lease can lead to another attempt                                |
-| Recovery              | Four automatic attempts, backoff with jitter, dead state, and manual replay          | Receiver recovery is not guaranteed                                         |
-| Receiver effects      | A unique event constraint deduplicates demo effects                                  | Real receivers need their own transactional idempotency                     |
-| Payload authenticity  | HMAC-SHA256 with a timestamp and five-minute validity window                         | The processor uses an in-process receiver, not an external HTTP call        |
-| Tenant isolation      | Application-owned accounts and server-side sessions scope data and dashboard actions | Authentication and recovery policies need review before a public deployment |
-| Destination safety    | Only built-in receiver destinations are accepted                                     | Arbitrary external webhook URLs are unsupported                             |
+| Concern               | Implemented approach                                                                                        | Boundary                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Durable state         | SQLite stores deliveries and attempts; a standalone worker processes due work                               | Autonomous progress requires a running worker with access to the database      |
+| Duplicate submissions | A unique key scoped to tenant and endpoint identifies an accepted event                                     | A reused key with a different payload or event type returns `409`              |
+| Competing processors  | Atomic lease claims and token-checked completion                                                            | An expired lease can lead to another attempt                                   |
+| Recovery              | Four automatic attempts, backoff with jitter, dead state, and manual replay                                 | Receiver recovery is not guaranteed                                            |
+| Receiver effects      | A unique event constraint deduplicates demo effects                                                         | Real receivers need their own transactional idempotency                        |
+| Payload authenticity  | HMAC-SHA256 with a timestamp and five-minute validity window                                                | The processor uses an in-process receiver, not an external HTTP call           |
+| Tenant isolation      | Application-owned accounts and server-side sessions scope data and dashboard actions                        | Authentication and recovery policies need review before a public deployment    |
+| Account security      | Public session identifiers, revocation, current-password verification, and atomic password/session rotation | Email verification and forgotten-password recovery remain future work          |
+| Inspection            | Account-scoped audit pagination and URL-backed filters and event drawers                                    | Links carry identifiers and filter state; access still requires authentication |
+| Destination safety    | Only built-in receiver destinations are accepted                                                            | Arbitrary external webhook URLs are unsupported                                |
 
 Replay retains the event ID, payload, and idempotency key. It resets the current attempt budget while preserving attempt history. Neither idempotency nor leasing provides exactly-once network delivery.
 
@@ -111,6 +115,8 @@ npm run smoke
 
 It checks authentication, same-origin protection, account isolation, duplicate submissions, immutable replay cycles, paused bulk recovery, and the guided repair-to-delivery path. It only accepts loopback URLs and creates two test accounts, three events in the primary workspace, and one event in the isolation workspace. Run the worker alongside the web server; the check can also advance request fallback while polling its own test data.
 
+With the same local server running, `npm run security:smoke` checks session revocation, password rotation, strict security/audit requests, and audit isolation using separate synthetic accounts. It changes only its own test account's password. The checks leave their test records in the local database.
+
 No throughput, availability, or latency benchmark is claimed. Dashboard durations describe controlled receiver attempts; they do not measure external network performance. Each workspace accepts up to 500 events. The overview snapshot returns the latest 100 deliveries; the delivery-history API pages through the workspace's full accepted history with server-side search, status, and endpoint filters.
 
 ## Code map
@@ -120,6 +126,8 @@ No throughput, availability, or latency benchmark is claimed. Dashboard duration
 | `app/`                   | Dashboard and HTTP route entry points                                                 |
 | `lib/contracts.ts`       | Shared actions, snapshot, paginated delivery-history, and detail types                |
 | `lib/server/auth.ts`     | Credential validation, password hashing, session lifecycle, and authentication limits |
+| `lib/server/audit.ts`    | Unified account-owned delivery and security audit queries                             |
+| `lib/navigation.ts`      | Canonical URL state and safe local sign-in return destinations                        |
 | `lib/server/database.ts` | Native SQLite adapter, transactional batches, and migration tracking                  |
 | `lib/server/service.ts`  | Acceptance, leases, processing, receiver effects, and snapshots                       |
 | `lib/server/worker.ts`   | Autonomous queue passes, worker heartbeat, and graceful shutdown                      |

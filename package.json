@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "db:migrate": "node scripts/migrate-local.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "security:smoke": "node scripts/security-smoke.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

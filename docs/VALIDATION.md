@@ -1,25 +1,51 @@
 # Validation record
 
-Updated on **2026-10-12** for the Recovery release of RelayForge's standalone Next.js runtime and worker on Node.js 24, with application-owned accounts and sessions and a persistent SQLite database. Earlier worker and UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
+Updated on **2026-10-13** for the account security, unified audit, and URL navigation release of RelayForge's standalone Next.js runtime and worker on Node.js 24. Earlier recovery, worker, and UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
 
-The current checks cover recovery cycles, bounded bulk replay, the persisted Recovery Lab, application accounts, paginated delivery history, and the standalone worker. Automated checks passed on the Recovery implementation, and the expanded HTTP smoke passed against its compiled release. Production browser interaction checks are recorded separately below.
+The current checks add active-session management, verified password rotation, complete account audit history, and canonical dashboard URL state to the recovery and worker checks. Production HTTP and browser checks are recorded separately below.
 
 ## Automated checks
 
-| Check                                     | Current standalone-runtime result                                                                              |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`                       | Passed on the Recovery implementation                                                                          |
-| `npm test`                                | 39 tests passed, 0 failed: the prior 29 checks plus nine Recovery checks and one autonomous Recovery Lab check |
-| `npm run db:migrate`                      | Migration 0003 passed on the backed-up local database; existing row counts and legacy attempts were preserved  |
-| `npm run build`                           | Passed on the final Recovery implementation, including `/api/recovery/replay`                                  |
-| `npm run lint`                            | Passed with 0 warnings on the Recovery implementation                                                          |
-| `npm run smoke`                           | Passed against the final compiled Recovery application with the standalone worker active                       |
-| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                                               |
-| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                                      |
+| Check                                     | Current standalone-runtime result                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`                       | Passed on the account security, audit, and URL implementation                                                                        |
+| `npm test`                                | 58 tests passed, 0 failed: the prior 39 checks plus 11 security, four audit, and four navigation checks                              |
+| `npm run db:migrate`                      | Migration 0004 passed on the backed-up local database; existing account, session, event, attempt, and activity counts were preserved |
+| `npm run build`                           | Passed on the compiled release, including `/api/security` and `/api/audit`                                                           |
+| `npm run lint`                            | Passed with 0 warnings                                                                                                               |
+| `npm run smoke`                           | Passed against the compiled release with the standalone worker active                                                                |
+| `npm run security:smoke`                  | Passed against the same compiled release: session revocation, password rotation, strict input, and unified audit                     |
+| `npm audit --omit=dev --audit-level=high` | 0 production dependency findings                                                                                                     |
+| `npm audit`                               | 5 high findings in the lint dependency chain; see [Security](SECURITY.md)                                                            |
 
 The test suite uses the same SQLite adapter as the application. It covers password hashing, credential validation, session expiry and revocation, authentication limits, payload identity, signatures, retry bounds, request validation, tenant isolation, competing SQLite connections, expired leases, stale completion, replay, receiver effect deduplication, and controlled timeout behavior.
 
 The history checks cover strict query bounds, stable pagination across 125 records, search beyond the latest-100 snapshot, literal search characters, and account isolation. Attempt metadata checks cover replay with equal timestamps and interrupted attempts without a measured HTTP duration. Endpoint duration remains available when its measured attempt falls outside the snapshot window. These tests do not reproduce a distributed production deployment.
+
+## Account security, audit, and URL checks — 2026-10-13
+
+Eleven security tests cover migration compatibility; the 50-session and 20-event bounds; current-session ordering; public-ID separation from authentication tokens; ownership and current-session revocation guards; password verification and rotation; audit-failure rollback for password changes and both revocation actions; stale-login verification; revocation during asynchronous password work; competing password changes; and persistent per-account security limits. The race checks use real SQLite connections and controlled checkpoints rather than relying on scheduling luck.
+
+Four audit tests traverse 67 delivery/security records without repeated pages, check deterministic equal-time ordering, combine account-scoped event/operation/date/literal-text filters, and reject ambiguous or excessive queries. Four navigation tests cover URL round trips, independent recovery filters, canonical bounded defaults, and local-only login returns. These pure navigation tests verify serialization; actual browser history behavior is checked separately in the compiled interface.
+
+Before applying migration 0004, the existing local database was backed up outside the repository. The upgrade retained **11 accounts, two sessions, 97 deliveries, 192 attempts, and 324 activity entries**. Both sessions received separate public IDs and retained unknown last-request timestamps until used. The migration count increased from four to five and SQLite's integrity check returned `ok`.
+
+### Compiled HTTP and browser checks
+
+Both HTTP scripts passed with the compiled web application and standalone worker using the same database. The security script creates two synthetic accounts and 20 healthy events, verifies old cookies become unusable after revocation and password rotation, and checks that response JSON contains no submitted credentials, raw tokens, or token hashes. It checks same-origin and strict-schema failures, the security mutation quota, ownership, full audit pagination beyond 30 entries, and operation/date/search filters. Bounded HTTP polling waits for claims and replay to finish before comparing audit pages, preventing worker timing from changing the result mid-check. Password changes affect only the script's own synthetic account.
+
+The compiled interface was checked in the existing synthetic reviewer workspace:
+
+- Security retained its URL after reload and displayed its migrated current session. A disposable session row with no usable authentication token and a ten-minute expiry was added to this test account to exercise the revocation UI. Escape closed the all-other-sessions confirmation and restored focus to its opener. Confirming individual revocation removed the fixture, preserved the current session, and added the visible security audit entry. Dialog backgrounds were inert.
+- Password fields use the correct current/new-password autocomplete attributes, and Show/Hide changes the empty fields' types. No existing account password was entered or changed through the browser. Actual credential rotation and rejection cases were checked by the HTTP script and service tests.
+- Activity showed **143 account-owned records**, including delivery and security categories. Selecting ten rows and Next produced records 11–20; reload, Back, and Forward preserved and restored the correct URL and page. A replay operation link returned its two associated records.
+- A linked event opened its five-attempt drawer with separate replay and legacy history. Reload restored the operation filter and open event; Escape removed the event parameter while preserving the operation. Event links exposed ordinary dashboard URLs.
+- Search survived reload through its canonical URL. A UTC range restored both native date fields and its two matching records from URL state; Apply dates retained the range, and Clear dates removed it. Native date-field typing was not automated; server date validation is covered by tests and HTTP checks.
+- Recovery retained its completed guide and event-specific effect. Changing the row count cleared selection; a filtered one-record list survived reload. Its review showed the receiver's current healthy state, and Escape returned to the selection without replaying it.
+- At **390 × 844**, Security and Activity had no document-level horizontal overflow. Session panels, audit category/action controls, and UTC date fields stayed within the viewport. Mobile menu Escape restored focus to Open navigation. Security also had no horizontal overflow at **800 × 900**. Temporary viewport overrides were cleared after testing.
+- The captured production browser console and runtime error logs contained no warnings or errors.
+
+[Security desktop](security-preview.jpg), [mobile Security](security-mobile-preview.jpg), and [Audit Explorer](audit-preview.jpg) show the compiled interface. These are targeted interaction checks, not a complete accessibility or browser compatibility audit. Email verification, forgotten-password recovery, and reviewed public-service abuse controls remain outside this release.
 
 ## Recovery verification — 2026-10-12
 
@@ -149,6 +175,6 @@ These are targeted interaction checks, not a complete accessibility or browser c
 
 ## Reproduce
 
-Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep the web application running, start `npm run worker` in a second terminal with the same `DATABASE_PATH`, and execute `npm run smoke` in another terminal. Open Recovery to inspect failed deliveries, select standard records for bulk replay, and run Recovery Lab through failure, repair, and replay. Reload to inspect its persisted stage and grouped cycle history. Stop and restart the worker to inspect the observed processing mode. `npm test` includes isolated migration, recovery transaction, child-process, and worker lifecycle checks.
+Follow the [README setup](../README.md#run-locally), then run the type check, tests, and build. Keep the web application running, start `npm run worker` in a second terminal with the same `DATABASE_PATH`, and execute `npm run smoke` and `npm run security:smoke` in another terminal. Open Security to inspect active sessions and Activity to filter complete audit history. Use Next, reload, and Back/Forward to inspect preserved URL state; open an event link to restore its drawer. Open Recovery to inspect failed deliveries, select standard records for bulk replay, and run Recovery Lab through failure, repair, and replay. Reload to inspect its persisted stage and grouped cycle history. Stop and restart the worker to inspect the observed processing mode. `npm test` includes isolated migration, credential and replay race/rollback, URL boundary, child-process, and worker lifecycle checks.
 
 No throughput, external network latency, or availability benchmark is claimed. Dependency audit results are time-specific; rerun them when the dependency tree changes.

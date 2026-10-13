@@ -21,14 +21,41 @@ export const sessions = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: integer("created_at").notNull(),
     expiresAt: integer("expires_at").notNull(),
+    publicId: text("public_id"),
+    lastSeenAt: integer("last_seen_at"),
   },
   (table) => [
     index("sessions_user_idx").on(table.userId),
     index("sessions_expiry_idx").on(table.expiresAt),
+    uniqueIndex("sessions_public_id_idx").on(table.publicId),
   ],
 );
 export const authRateLimits = sqliteTable("auth_rate_limits", {
   key: text("key").primaryKey(),
+  windowStart: integer("window_start").notNull(),
+  attempts: integer("attempts").notNull(),
+});
+
+export const securityEvents = sqliteTable(
+  "security_events",
+  {
+    id: text("id").primaryKey(),
+    owner: text("owner")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    message: text("message").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("security_events_owner_idx").on(table.owner, table.createdAt),
+  ],
+);
+
+export const securityRateLimits = sqliteTable("security_rate_limits", {
+  owner: text("owner")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
   windowStart: integer("window_start").notNull(),
   attempts: integer("attempts").notNull(),
 });

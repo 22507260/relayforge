@@ -49,6 +49,10 @@ For a separate autonomy demonstration, enqueue a flaky event with the worker run
 
 ## Read the code in this order
 
+Use Security and Activity to explain the account boundary. A public session ID selects a revocation target but cannot authenticate. Password verification happens outside the write lock, so its result must be checked again against both the authorizing session and unchanged password hash when committing. Sign-in uses the same hash guard to avoid reviving a password that changed while verification was running. The tests reproduce these races with independent SQLite connections and deliberate checkpoints.
+
+Audit pagination queries account-owned rows across the complete history rather than treating the overview's latest 30 entries as complete. Canonical dashboard URLs preserve inspection state and event links while every API read still checks account ownership. A copied event URL is a navigation instruction, not an authorization grant.
+
 1. `lib/contracts.ts`: name the states and allowed actions.
 2. `db/schema.ts` and `drizzle/`: find ownership, unique constraints, attempts, and leases.
 3. `lib/server/auth.ts`, `context.ts`, and API handlers: follow password hashing, session verification, identity, and validation.
@@ -68,6 +72,8 @@ Practice changing one behavior, such as receiver mode or retry delay, and predic
 - **Transaction:** Birlikte başarılı veya başarısız olması gereken veritabanı değişiklikleri için kullanılır. Uzak HTTP çağrısı ve farklı veritabanları kendiliğinden tek transaction olmaz.
 - **Backoff ve jitter:** Başarısız denemeler arasında artan bekleme ve küçük rastgele sapma. Aynı anda başarısız olan işlerin aynı anda tekrar yük oluşturmasını azaltabilir.
 - **Tenant izolasyonu:** Her okuma ve yazma sunucunun doğruladığı kullanıcıya bağlı olmalı. Event ID'yi bilmek yetki vermemeli.
+- **Oturum güvenliği:** Arayüzdeki session ID giriş token'ı değildir. Şifre değişirken eski şifrenin doğrulanmış olması tek başına yetmez; transaction içinde oturum ve password hash yeniden kontrol edilir. Eski oturumlar iptal edilir, mevcut tarayıcıya yeni oturum verilir.
+- **Audit ve URL:** Activity tam geçmişi kullanıcıya göre sorgular. URL ekranı, filtreyi ve açılan event'i korur; linki bilmek API yetkisi vermez.
 - **Replay:** Yeni bir event oluşturmaz. Kimlik ve payload korunur; deneme bütçesi sıfırlanır, eski denemeler saklanır.
 - **Bağımsız worker:** `npm run worker` aynı SQLite dosyasını kullanır ve tarayıcı kapalıyken vadesi gelen işleri işleyebilir. Worker çalışmıyorsa arayüzün pump istekleri gerekir.
 - **Heartbeat:** Yakın zamanda veritabanına yazılan yaşam belirtisidir. Teslimatın başarılı olduğunu veya her işin ilerlediğini tek başına kanıtlamaz.

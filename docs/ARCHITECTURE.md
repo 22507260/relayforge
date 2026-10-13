@@ -29,8 +29,11 @@ These are logical boundaries sharing one database and delivery implementation. T
 | `POST /api/auth/register`   | Create an email/password account and a session                      | Same-origin checks and validated credentials   |
 | `POST /api/auth/login`      | Verify credentials and create a session                             | Same-origin checks and validated credentials   |
 | `POST /api/auth/logout`     | Revoke the current session                                          | Session and same-origin checks                 |
-| `GET /api/snapshot`         | Read persisted dashboard state; no mutation                         | Application session                            |
+| `GET /api/snapshot`         | Read persisted queue state without advancing processing             | Application session                            |
 | `GET /api/deliveries`       | Search and page through tenant-owned delivery history               | Application session                            |
+| `GET /api/security`         | Inspect account-owned active sessions and recent security events    | Application session                            |
+| `POST /api/security`        | Revoke other sessions or verify and change the account password     | Application session and same-origin checks     |
+| `GET /api/audit`            | Search and page through delivery and security audit records         | Application session                            |
 | `POST /api/action`          | Initialize, send, demo, set receiver mode, replay, pause, or pump   | Application session and same-origin checks     |
 | `POST /api/recovery/replay` | Replay up to 20 selected dead standard deliveries with cycle guards | Application session and same-origin checks     |
 | `GET /api/deliveries/:id`   | Read one tenant-owned delivery and its attempts                     | Application session                            |
@@ -41,6 +44,16 @@ Accounts and sessions belong to the application. A browser request establishes i
 The `/login` page supports account creation and sign-in. The server validates emails and passwords, including the 12–128 character password bound. The database defaults to `.data/relayforge.sqlite`; `DATABASE_PATH` can select a persistent deployment path. Committed migrations apply on database initialization and can also be run explicitly through `npm run db:migrate`.
 
 Passwords use salted scrypt hashing. Sessions contain a random opaque token; only its SHA-256 hash is stored in the database. The session expires after seven days. Its cookie is HttpOnly and SameSite=Lax, with Secure enabled in production. Sign-out revokes the stored session. Authentication attempts are bounded by persistent ten-minute counters: ten per normalized email and 100 across the application.
+
+## Account security and inspection
+
+Security session summaries use a separate random public ID, never the authentication token or its hash. The response includes the total active count, at most 50 active session rows with the current one first, and the latest 20 account security events. Last request timestamps are updated at most once per minute without extending seven-day expiry. Legacy sessions receive public IDs during migration and retain unknown last-request times until used.
+
+Session revocation checks both ownership and the authorizing session within the write transaction. Password changes verify the current password asynchronously, then recheck the password hash and current unexpired session under the write lock. Password replacement, creation of one fresh session, revocation of previous sessions, and the security audit entry commit together. The response sets a fresh HttpOnly cookie. Sign-in rechecks the hash it verified before inserting its session, preventing an old-password verification from establishing a session after a concurrent password change. A separate five-per-ten-minute account counter bounds security mutation attempts.
+
+The audit API unions account-owned delivery activity and security events. It accepts `page` (1–500), `pageSize` (1–50), `category` (`all`, `delivery`, `security`), a known `kind`, `search` (up to 100 characters), `eventId`, `operationId`, and inclusive `from`/`to` millisecond timestamps. Unknown or duplicated parameters, malformed bounds, and reversed date ranges return `400`. Search treats characters literally. Count and rows share one batch, with pages clamped to the matching history and ties ordered by timestamp descending, category ascending, then ID descending. Replay operation IDs allow an operator to inspect records written by the same operation.
+
+The dashboard stores view, filters, page, size, and optional event drawer in canonical query parameters on `/`. `lib/navigation.ts` parses and bounds URL state; `pushState` supports navigation and `replaceState` supports debounced search without a history entry for every keystroke. Activity's `auditEvent` filters its history independently of `event`, which opens a detail drawer. API parameter names are mapped explicitly from URL state. Event controls have ordinary links for copying or opening another tab. Reload and Back/Forward reconstruct the same state; login preserves a validated local dashboard `returnTo`. URLs contain identifiers and filters, while payloads remain authenticated API data.
 
 `lib/contracts.ts` defines `Action`, `Snapshot`, `DeliveryPage`, `DeliveryDetail`, and the visible states. The server validates incoming actions with Zod because TypeScript types do not constrain arbitrary request JSON. The snapshot includes the authenticated account's ID and email, describes the observed processor mode using the worker heartbeat, and exposes the retry cap, workspace event limit, and snapshot limit. Signing secrets, password hashes, and session tokens are excluded.
 

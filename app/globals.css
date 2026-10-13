@@ -4495,3 +4495,630 @@ button.event-cell {
     font-size: 10px;
   }
 }
+
+/* Account security and durable audit history share the workspace foundations. */
+.security-header-mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgba(185, 249, 74, 0.2);
+  border-radius: 18px;
+  color: var(--lime);
+  background: linear-gradient(145deg, rgba(185, 249, 74, 0.09), transparent);
+}
+.security-summary {
+  display: grid;
+  grid-template-columns: 1.5fr 0.8fr 1fr;
+  gap: 24px;
+  padding: 26px;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    linear-gradient(115deg, rgba(185, 249, 74, 0.025), transparent 60%),
+    var(--surface);
+}
+.security-summary > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  min-width: 0;
+}
+.security-summary > div:first-child > div {
+  min-width: 0;
+}
+.security-summary-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 45px;
+  height: 45px;
+  background: rgba(185, 249, 74, 0.07);
+  color: var(--lime);
+  border-radius: 14px;
+}
+.security-summary small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+.security-summary strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.security-summary .security-session-count {
+  font-size: 26px;
+  line-height: 1;
+  color: var(--lime);
+}
+.security-summary span:not(.security-summary-icon) {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.7;
+  margin-top: 7px;
+}
+.security-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(310px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.security-panel-heading {
+  padding: 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.security-panel-heading h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 5px 0 9px;
+  letter-spacing: -0.45px;
+}
+.security-panel-heading p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 0;
+  max-width: 340px;
+}
+.security-panel-heading > svg {
+  color: var(--muted);
+  margin-top: 8px;
+}
+.security-panel-heading .button {
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 6px;
+  padding: 9px 11px;
+}
+.security-panel-heading .page-eyebrow {
+  font-size: 8px;
+}
+.security-cap-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+  padding: 12px 24px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: rgba(185, 249, 74, 0.025);
+}
+.security-session {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.security-session:last-child {
+  border-bottom: 0;
+}
+.security-session-icon {
+  display: grid;
+  place-items: center;
+  width: 37px;
+  height: 37px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+.security-session-icon.current {
+  color: var(--lime);
+  background: rgba(185, 249, 74, 0.07);
+  border-color: rgba(185, 249, 74, 0.12);
+}
+.security-session-info {
+  flex: 1;
+  min-width: 0;
+}
+.security-session-info > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.security-session-info strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.security-current {
+  color: var(--lime);
+  font-size: 7px;
+  letter-spacing: 0.6px;
+  padding: 4px 6px;
+  border: 1px solid rgba(185, 249, 74, 0.12);
+  border-radius: 4px;
+  background: rgba(185, 249, 74, 0.05);
+}
+.security-session-info code {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  margin-top: 7px;
+}
+.security-session-info p {
+  display: flex;
+  gap: 4px 16px;
+  flex-wrap: wrap;
+  font-size: 9px;
+  color: var(--muted);
+  margin: 10px 0;
+  line-height: 1.7;
+}
+.security-session-info small {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.security-session > .button {
+  font-size: 10px;
+  padding: 8px 10px;
+}
+.security-password form {
+  display: grid;
+  gap: 10px;
+  padding: 24px;
+}
+.security-password label {
+  font-size: 11px;
+  font-weight: 500;
+  margin-top: 5px;
+}
+.security-password input,
+.audit-date-toolbar input {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 7px;
+  padding: 11px 12px;
+  outline: none;
+  color-scheme: dark;
+}
+.security-password input:focus,
+.audit-date-toolbar input:focus {
+  border-color: rgba(185, 249, 74, 0.5);
+  box-shadow: 0 0 0 3px rgba(185, 249, 74, 0.05);
+}
+.security-password-input {
+  display: flex;
+  position: relative;
+}
+.security-password-input input {
+  padding-right: 43px;
+}
+.security-password-input .icon-button {
+  position: absolute;
+  right: 5px;
+  top: 4px;
+}
+.security-form-guidance {
+  margin: -2px 0 1px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.security-password form > .button {
+  margin-top: 8px;
+  justify-content: center;
+}
+.security-success {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(185, 249, 74, 0.15);
+  border-radius: 9px;
+  background: rgba(185, 249, 74, 0.04);
+  color: var(--lime);
+  font-size: 11px;
+  line-height: 1.8;
+  margin-bottom: 20px;
+}
+.security-success > svg {
+  flex-shrink: 0;
+}
+.security-success .icon-button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.security-confirm-copy {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.9;
+}
+.security-events {
+  margin-top: 24px;
+}
+.security-events .security-panel-heading .text-button {
+  align-self: center;
+  font-size: 11px;
+}
+.security-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.security-event:last-child {
+  border-bottom: 0;
+}
+.security-event > span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: #bc9aff;
+  background: rgba(188, 154, 255, 0.07);
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+.security-event > div {
+  flex: 1;
+  min-width: 0;
+}
+.security-event strong {
+  text-transform: capitalize;
+  font-size: 11px;
+  font-weight: 600;
+}
+.security-event p {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.8;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.security-event time {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+  padding-top: 5px;
+}
+.audit-record-count {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 10px 12px;
+}
+.audit-toolbar .toolbar-search {
+  flex: 1;
+}
+.audit-date-toolbar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: -4px 0 22px;
+}
+.audit-date-toolbar label {
+  display: grid;
+  gap: 7px;
+  font-size: 9px;
+  color: var(--muted);
+}
+.audit-date-toolbar input {
+  font-size: 10px;
+  min-height: 38px;
+  padding: 9px;
+  width: 225px;
+}
+.audit-date-toolbar .button {
+  font-size: 10px;
+  min-height: 38px;
+}
+.audit-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-bottom: 18px;
+}
+.audit-filter-chips button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(185, 249, 74, 0.15);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(185, 249, 74, 0.04);
+  color: var(--lime);
+  font-size: 10px;
+}
+.audit-filter-chips code {
+  font-size: 9px;
+}
+.audit-record {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  padding: 23px 24px;
+  border-top: 1px solid var(--border);
+}
+.audit-record .activity-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.audit-record-body {
+  flex: 1;
+  min-width: 0;
+}
+.audit-record-body > div:first-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.audit-record-body strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.audit-category {
+  display: inline-flex;
+  font-size: 8px;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  padding: 4px 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+.audit-category.security {
+  color: #bc9aff;
+  border-color: rgba(188, 154, 255, 0.15);
+  background: rgba(188, 154, 255, 0.035);
+}
+.audit-record-body small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.audit-record-body > p {
+  color: var(--muted);
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+.audit-record-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 11px;
+}
+.audit-record-links a {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-family: var(--font-mono), monospace;
+  color: var(--lime);
+  font-size: 9px;
+}
+.audit-record-links button {
+  background: none;
+  color: var(--muted);
+  font-size: 9px;
+  padding: 3px 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.audit-record-links button:hover {
+  color: var(--text);
+}
+.audit-record time {
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  padding-top: 5px;
+  white-space: nowrap;
+}
+.audit-record time small {
+  display: block;
+  text-align: right;
+  font-size: 8px;
+  margin-top: 5px;
+}
+a.event-cell {
+  text-decoration: none;
+}
+.drawer-actions a.button {
+  text-decoration: none;
+}
+@media (max-width: 1250px) {
+  .security-grid {
+    grid-template-columns: minmax(0, 1.25fr) minmax(285px, 1fr);
+    gap: 18px;
+  }
+  .security-panel-heading {
+    flex-wrap: wrap;
+    padding: 21px;
+  }
+  .security-panel-heading .button {
+    margin-top: 0;
+  }
+  .security-session {
+    padding: 20px;
+    gap: 10px;
+  }
+  .security-summary {
+    gap: 20px;
+  }
+}
+@media (max-width: 760px) {
+  .security-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .security-summary {
+    grid-template-columns: 1fr 1fr;
+    padding: 20px;
+    gap: 23px;
+  }
+  .security-summary > div:first-child {
+    grid-column: 1 / -1;
+  }
+  .security-panel-heading {
+    padding: 20px;
+  }
+  .security-password form {
+    padding: 20px;
+  }
+  .security-events .security-panel-heading {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .security-events .security-panel-heading .text-button {
+    align-self: flex-start;
+    min-height: 36px;
+  }
+  .audit-record {
+    padding: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .audit-record-body {
+    flex-basis: calc(100% - 54px);
+  }
+  .audit-record time {
+    margin-left: 50px;
+    font-size: 9px;
+  }
+  .audit-record time small {
+    display: inline;
+    margin-left: 7px;
+  }
+  .audit-date-toolbar {
+    gap: 10px;
+  }
+  .audit-date-toolbar label {
+    flex: 1;
+    min-width: 160px;
+  }
+  .audit-date-toolbar input {
+    width: 100%;
+  }
+  .audit-toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .audit-toolbar .toolbar-search {
+    flex-basis: 100%;
+  }
+  .audit-toolbar .filter-select {
+    flex: 1;
+  }
+  .audit-toolbar .filter-select select {
+    width: 100%;
+  }
+  .audit-record-count {
+    display: none;
+  }
+}
+@media (max-width: 480px) {
+  .security-header-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+  }
+  .security-summary strong {
+    font-size: 11px;
+  }
+  .security-summary > div:last-child span {
+    font-size: 9px;
+  }
+  .security-session {
+    padding: 18px 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .security-session-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .security-session-info {
+    flex-basis: calc(100% - 44px);
+  }
+  .security-session > .button {
+    margin-left: 42px;
+    min-height: 36px;
+  }
+  .security-session-info strong {
+    font-size: 11px;
+  }
+  .security-event {
+    padding: 17px 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .security-event time {
+    margin-left: 40px;
+    padding-top: 0;
+  }
+  .security-panel-heading h2 {
+    font-size: 17px;
+  }
+  .security-panel-heading p {
+    font-size: 10px;
+  }
+  .security-current {
+    font-size: 6px;
+  }
+  .audit-record {
+    padding: 18px 16px;
+  }
+  .audit-record-body > p {
+    font-size: 10px;
+  }
+  .audit-record-body strong {
+    font-size: 11px;
+  }
+  .audit-record-links button,
+  .audit-filter-chips button {
+    min-height: 36px;
+  }
+  .audit-date-toolbar label {
+    min-width: 100%;
+  }
+}

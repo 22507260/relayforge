@@ -169,3 +169,77 @@ export interface RecoveryDemo {
   delivery: Delivery;
   businessEffects: number;
 }
+
+export type SecurityEventKind =
+  | "registered"
+  | "signed-in"
+  | "sign-in-failed"
+  | "signed-out"
+  | "session-revoked"
+  | "other-sessions-revoked"
+  | "password-changed";
+
+export interface SecurityEvent {
+  id: string;
+  kind: SecurityEventKind;
+  message: string;
+  createdAt: number;
+}
+
+export interface SessionSummary {
+  id: string;
+  createdAt: number;
+  expiresAt: number;
+  lastSeenAt: number | null;
+  isCurrent: boolean;
+}
+
+export interface SecuritySnapshot {
+  user: { id: string; email: string; createdAt: number };
+  currentSessionId: string;
+  sessions: SessionSummary[];
+  sessionCount: number;
+  events: SecurityEvent[];
+  now: number;
+}
+
+export type SecurityAction =
+  | { type: "revoke-session"; sessionId: string }
+  | { type: "revoke-other-sessions" }
+  | { type: "change-password"; currentPassword: string; newPassword: string };
+
+export interface SecurityMutationResponse {
+  security: SecuritySnapshot;
+  revokedSessions: number;
+}
+
+export interface AuditRecord {
+  id: string;
+  category: "delivery" | "security";
+  kind: Activity["kind"] | SecurityEventKind;
+  eventId: string | null;
+  cycle: number | null;
+  operationId: string | null;
+  message: string;
+  createdAt: number;
+}
+
+export interface AuditQuery {
+  page: number;
+  pageSize: number;
+  category: "all" | "delivery" | "security";
+  kind: "all" | Activity["kind"] | SecurityEventKind;
+  search: string;
+  eventId: string;
+  operationId: string;
+  from: number | null;
+  to: number | null;
+}
+
+export interface AuditPage {
+  records: AuditRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
