@@ -16,7 +16,9 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "db:migrate": "node scripts/migrate-local.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "security:smoke": "node scripts/security-smoke.mjs"
+    "security:smoke": "node scripts/security-smoke.mjs",
+    "request:smoke": "node scripts/request-smoke.mjs",
+    "verify:http": "node scripts/verify-http.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

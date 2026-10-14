@@ -194,7 +194,11 @@ export class AuthService {
       ),
     ]);
     if (!results[1].results.length)
-      throw new ApiError(401, "Email or password is incorrect.");
+      throw new ApiError(
+        401,
+        "Email or password is incorrect.",
+        "invalid_credentials",
+      );
     return { user, token };
   }
   async register(value: unknown): Promise<Session> {
@@ -256,7 +260,11 @@ export class AuthService {
           "A sign-in attempt used an incorrect password.",
           this.now(),
         ).run();
-      throw new ApiError(401, "Email or password is incorrect.");
+      throw new ApiError(
+        401,
+        "Email or password is incorrect.",
+        "invalid_credentials",
+      );
     }
     return this.createSession(
       { id: user.id, email: user.email },
@@ -431,7 +439,11 @@ export class AuthService {
       if (
         !(await verifyPassword(action.currentPassword, identity.password_hash))
       )
-        throw new ApiError(401, "Current password is incorrect.");
+        throw new ApiError(
+          401,
+          "Current password is incorrect.",
+          "current_password_incorrect",
+        );
       const newHash = await hashPassword(action.newPassword);
       const newToken = randomBytes(32).toString("base64url");
       const newDigest = tokenHash(newToken);
@@ -483,6 +495,7 @@ export class AuthService {
         throw new ApiError(
           401,
           "Your session changed. Sign in again before changing your password.",
+          "session_changed",
         );
       revokedSessions = results[2].meta?.changes ?? 0;
       newSession = {

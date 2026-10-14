@@ -1,3 +1,5 @@
+import type { ApiErrorCode } from "../contracts.ts";
+
 export const MAX_ATTEMPTS = 4;
 export const LEASE_MS = 15_000;
 export const MAX_BODY_BYTES = 16_384;
@@ -5,11 +7,36 @@ export const RECEIVER_TIMEOUT_MS = 250;
 export const WORKER_HEARTBEAT_TTL_MS = 10_000;
 export class ApiError extends Error {
   status: number;
+  code: ApiErrorCode;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: ApiErrorCode) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code ?? defaultErrorCode(status);
+  }
+}
+
+function defaultErrorCode(status: number): ApiErrorCode {
+  switch (status) {
+    case 400:
+      return "invalid_request";
+    case 401:
+      return "auth_required";
+    case 403:
+      return "forbidden";
+    case 404:
+      return "not_found";
+    case 409:
+      return "conflict";
+    case 413:
+      return "payload_too_large";
+    case 415:
+      return "unsupported_media_type";
+    case 429:
+      return "rate_limited";
+    default:
+      return status >= 500 ? "internal_error" : "request_failed";
   }
 }
 

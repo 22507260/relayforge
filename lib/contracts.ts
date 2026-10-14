@@ -243,3 +243,27 @@ export interface AuditPage {
   pageSize: number;
   totalPages: number;
 }
+
+export const API_ERROR_CODES = [
+  "invalid_request",
+  "auth_required",
+  "invalid_credentials",
+  "current_password_incorrect",
+  "session_changed",
+  "forbidden",
+  "not_found",
+  "conflict",
+  "rate_limited",
+  "payload_too_large",
+  "unsupported_media_type",
+  "internal_error",
+  "request_failed",
+] as const;
+
+export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
+
+export interface ApiFailure {
+  error: string;
+  code: ApiErrorCode;
+  requestId: string;
+}

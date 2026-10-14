@@ -76,6 +76,8 @@ import {
 import { RecoveryPanel } from "./components/recovery-panel";
 import { SecurityCenter } from "./components/security-center";
 import { AuditExplorer } from "./components/audit-explorer";
+import { CommandPalette } from "./components/command-palette";
+import { api, isSessionError } from "@/lib/client-api";
 import {
   navigationForView,
   parseNavigation,
@@ -116,64 +118,24 @@ const modeDescriptions: Record<ReceiverMode, string> = {
 };
 const capitalize = (value: string) =>
   value.charAt(0).toUpperCase() + value.slice(1);
-class RequestError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
-
 const loadRecoveryPage = (query: string, signal: AbortSignal) =>
   api<DeliveryPage>(`/api/deliveries?${query}`, undefined, signal);
 const loadSecurity = (signal: AbortSignal) =>
   api<SecuritySnapshot>("/api/security", undefined, signal);
 const loadAudit = (query: string, signal: AbortSignal) =>
   api<AuditPage>(`/api/audit?${query}`, undefined, signal);
-
-async function api<T>(
-  url: string,
-  action?: Action | ReplayBatchRequest | SecurityAction,
-  signal?: AbortSignal,
-): Promise<T> {
-  const response = await fetch(
-    url,
-    action
-      ? {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(action),
-          signal,
-        }
-      : { cache: "no-store", credentials: "same-origin", signal },
+const loadCommandResults = (search: string, signal: AbortSignal) =>
+  api<DeliveryPage>(
+    `/api/deliveries?${new URLSearchParams({
+      page: "1",
+      pageSize: "6",
+      search,
+      status: "all",
+      endpointId: "all",
+    })}`,
+    undefined,
+    signal,
   );
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new RequestError(
-      "The engine returned an unexpected response. Please reconnect.",
-      response.status,
-    );
-  }
-  const message =
-    body &&
-    typeof body === "object" &&
-    "error" in body &&
-    typeof body.error === "string"
-      ? body.error
-      : "The request could not be completed. Please try again.";
-  if (!response.ok)
-    throw new RequestError(
-      response.status === 401 && message !== "Current password is incorrect."
-        ? "Your session has ended. Sign in to continue."
-        : message,
-      response.status,
-    );
-  return body as T;
-}
 
 function ModeBadge({ mode }: { mode: ReceiverMode }) {
   return (
@@ -1409,6 +1371,14 @@ export default function Home() {
   const [urlState, setUrlState] = useState<NavigationState>(() =>
     navigationForView(),
   );
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandPresented, setCommandPresented] = useState(false);
+  const commandPresentedRef = useRef(false);
+  const commandOpenerRef = useRef<HTMLElement | null>(null);
+  const pendingCommandNavigation = useRef<{
+    state: NavigationState;
+    replace: boolean;
+  } | null>(null);
   const navigationRef = useRef(urlState);
   const changeNavigation = useCallback(
     (patch: Partial<NavigationState>, replace = false) => {
@@ -1430,6 +1400,11 @@ export default function Home() {
   useEffect(() => {
     const restore = () => {
       const next = parseNavigation(window.location.search);
+      if (commandPresentedRef.current) {
+        pendingCommandNavigation.current = { state: next, replace: true };
+        setCommandOpen(false);
+        return;
+      }
       navigationRef.current = next;
       setUrlState(next);
       const destination = serializeNavigation(next);
@@ -1522,8 +1497,11 @@ export default function Home() {
     setAuthRequired(false);
   }, []);
   const handleConnection = useCallback((err: unknown) => {
-    if (err instanceof RequestError && err.status === 401)
+    if (isSessionError(err)) {
       setAuthRequired(true);
+      pendingCommandNavigation.current = null;
+      setCommandOpen(false);
+    }
     setConnectionError(
       err instanceof Error ? err.message : "Unable to connect to the engine.",
     );
@@ -1593,8 +1571,7 @@ export default function Home() {
         else if (message) toast(message);
         return true;
       } catch (err) {
-        if (err instanceof RequestError && err.status === 401)
-          handleConnection(err);
+        if (isSessionError(err)) handleConnection(err);
         toast(
           err instanceof Error
             ? err.message
@@ -1623,8 +1600,7 @@ export default function Home() {
         updateSnapshot(data.snapshot);
         return data;
       } catch (err) {
-        if (err instanceof RequestError && err.status === 401)
-          handleConnection(err);
+        if (isSessionError(err)) handleConnection(err);
         toast(
           err instanceof Error
             ? err.message
@@ -1652,12 +1628,7 @@ export default function Home() {
       try {
         return await job;
       } catch (error) {
-        if (
-          error instanceof RequestError &&
-          error.status === 401 &&
-          error.message !== "Current password is incorrect."
-        )
-          handleConnection(error);
+        if (isSessionError(error)) handleConnection(error);
         throw error;
       } finally {
         acting.current = false;
@@ -1668,8 +1639,18 @@ export default function Home() {
   );
   const handleRecoveryConnection = useCallback(
     (err: unknown) => {
-      if (err instanceof RequestError && err.status === 401)
-        handleConnection(err);
+      if (isSessionError(err)) handleConnection(err);
+    },
+    [handleConnection],
+  );
+  const loadCommands = useCallback(
+    async (search: string, signal: AbortSignal) => {
+      try {
+        return await loadCommandResults(search, signal);
+      } catch (error) {
+        if (!signal.aborted && isSessionError(error)) handleConnection(error);
+        throw error;
+      }
     },
     [handleConnection],
   );
@@ -1709,8 +1690,7 @@ export default function Home() {
           error:
             err instanceof Error ? err.message : "Unable to load deliveries.",
         }));
-        if (err instanceof RequestError && err.status === 401)
-          handleConnection(err);
+        if (isSessionError(err)) handleConnection(err);
       });
     return () => controller.abort();
   }, [
@@ -1765,6 +1745,40 @@ export default function Home() {
   }, [isMobile, mobileOpen]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const protectedInput = target?.closest(
+        'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"], [contenteditable="true"], [role="dialog"]',
+      );
+      if (
+        event.key.toLowerCase() === "k" &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.repeat &&
+        !event.isComposing &&
+        !protectedInput &&
+        !target?.isContentEditable &&
+        snapshot &&
+        !eventOpen &&
+        !selected &&
+        !recoveryDialogOpen &&
+        !mobileOpen &&
+        !commandPresented &&
+        !authRequired &&
+        !busy &&
+        !signingOut &&
+        !document.querySelector('[role="dialog"]')
+      ) {
+        event.preventDefault();
+        pendingCommandNavigation.current = null;
+        commandOpenerRef.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        commandPresentedRef.current = true;
+        setCommandPresented(true);
+        setCommandOpen(true);
+        return;
+      }
       if (
         event.key === "/" &&
         !(event.target instanceof HTMLInputElement) &&
@@ -1773,7 +1787,11 @@ export default function Home() {
         !eventOpen &&
         !selected &&
         !recoveryDialogOpen &&
-        !mobileOpen
+        !mobileOpen &&
+        !commandPresented &&
+        !event.isComposing &&
+        !event.repeat &&
+        !target?.isContentEditable
       ) {
         event.preventDefault();
         searchRef.current?.focus();
@@ -1781,7 +1799,59 @@ export default function Home() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [eventOpen, selected, mobileOpen, recoveryDialogOpen]);
+  }, [
+    eventOpen,
+    selected,
+    mobileOpen,
+    recoveryDialogOpen,
+    commandPresented,
+    authRequired,
+    busy,
+    signingOut,
+    snapshot,
+  ]);
+  const openCommandPalette = () => {
+    if (
+      !snapshot ||
+      eventOpen ||
+      selected ||
+      recoveryDialogOpen ||
+      mobileOpen ||
+      commandPresented ||
+      authRequired ||
+      busy ||
+      signingOut ||
+      document.querySelector('[role="dialog"]')
+    )
+      return;
+    pendingCommandNavigation.current = null;
+    commandOpenerRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    commandPresentedRef.current = true;
+    setCommandPresented(true);
+    setCommandOpen(true);
+  };
+  const closeCommandPalette = useCallback(() => {
+    pendingCommandNavigation.current = null;
+    setCommandOpen(false);
+  }, []);
+  const navigateFromCommand = useCallback((state: NavigationState) => {
+    pendingCommandNavigation.current = { state, replace: false };
+    setCommandOpen(false);
+  }, []);
+  const commandExitComplete = useCallback(() => {
+    commandPresentedRef.current = false;
+    setCommandPresented(false);
+    const destination = pendingCommandNavigation.current;
+    pendingCommandNavigation.current = null;
+    if (destination) changeNavigation(destination.state, destination.replace);
+    if (!destination?.state.event) {
+      const opener = commandOpenerRef.current;
+      window.requestAnimationFrame(() => opener?.focus());
+    }
+  }, [changeNavigation]);
   const go = (next: View) => {
     changeNavigation(navigationForView(next.toLowerCase() as NavigationView));
     setMobileOpen(false);
@@ -1815,12 +1885,7 @@ export default function Home() {
     setSigningOut(true);
     try {
       await queue.current;
-      const response = await fetch("/api/auth/logout", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      if (!response.ok)
-        throw new Error("Could not sign out. Please try again.");
+      await api("/api/auth/logout", {});
       router.replace("/login");
       router.refresh();
     } catch (err) {
@@ -1840,7 +1905,10 @@ export default function Home() {
     status === "all" &&
     endpointFilter === "all";
   const hasModal = Boolean(
-    snapshot && !authRequired && (eventOpen || selected || recoveryDialogOpen),
+    commandPresented ||
+    (snapshot &&
+      !authRequired &&
+      (eventOpen || selected || recoveryDialogOpen)),
   );
   return (
     <MotionConfig reducedMotion="user">
@@ -2013,6 +2081,28 @@ export default function Home() {
               />
               <kbd>/</kbd>
             </label>
+            <button
+              type="button"
+              className="rf-command-trigger"
+              aria-label="Open command palette"
+              title="Open command palette (Ctrl or Cmd + K)"
+              onClick={openCommandPalette}
+              disabled={
+                !snapshot ||
+                busy ||
+                authRequired ||
+                signingOut ||
+                commandPresented ||
+                mobileOpen ||
+                eventOpen ||
+                Boolean(selected) ||
+                recoveryDialogOpen
+              }
+            >
+              <Search size={17} />
+              <span>Commands</span>
+              <kbd>⌘ K</kbd>
+            </button>
             <span
               className={`engine-indicator ${connectionError ? "disconnected" : snapshot?.system.queuePaused || (processor && !processor.online) ? "paused" : ""}`}
               title={processor?.description}
@@ -2403,6 +2493,16 @@ export default function Home() {
             )}
           </main>
         </div>
+        <AnimatePresence onExitComplete={commandExitComplete}>
+          {commandOpen && snapshot && !authRequired && (
+            <CommandPalette
+              endpoints={snapshot.endpoints}
+              load={loadCommands}
+              navigate={navigateFromCommand}
+              onClose={closeCommandPalette}
+            />
+          )}
+        </AnimatePresence>
         <AnimatePresence>
           {eventOpen && snapshot && !authRequired && (
             <EventForm

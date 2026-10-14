@@ -1,5 +1,15 @@
 # Validation record
 
+## Command navigation and request diagnostics — 2026-10-14
+
+The command palette and structured request-error release passed lint, TypeScript, all **81 tests**, the production build, and the production dependency audit (zero findings). The suite adds 23 checks for HTTP error isolation and request IDs, safe client decoding and retry metadata, and bounded navigation search.
+
+`npm run verify:http` passed all three HTTP smoke scripts against a separate compiled web process, standalone worker, and disposable SQLite database. The runner shuts down its child processes and removes only its verified temporary directory. CI now runs this compiled HTTP check after building.
+
+The compiled browser interface opened the palette with input focus and inert backgrounds, searched persisted event history, and opened the selected recovery event after the palette's exit animation. The resulting single drawer received focus and retained Initial delivery and Replay 1 histories. Escape closed both surfaces. At 390 × 844, the palette had no document overflow, one dialog, focused combobox, and two inert background regions. [Desktop](command-preview.jpg) and [mobile](command-mobile-preview.jpg) captures record the interface. Credential-error and cooldown behavior are covered by automated client and HTTP tests; no existing account password was changed in browser verification.
+
+Earlier release checks follow below.
+
 Updated on **2026-10-13** for the account security, unified audit, and URL navigation release of RelayForge's standalone Next.js runtime and worker on Node.js 24. Earlier recovery, worker, and UI checks are dated separately below. These results describe the checks performed; they are not a throughput benchmark or a production availability claim.
 
 The current checks add active-session management, verified password rotation, complete account audit history, and canonical dashboard URL state to the recovery and worker checks. Production HTTP and browser checks are recorded separately below.

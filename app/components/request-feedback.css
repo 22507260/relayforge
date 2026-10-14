@@ -1,0 +1,63 @@
+.request-feedback {
+  color: var(--red, #f58287);
+  border: 1px solid rgba(245, 130, 135, 0.22);
+  background: rgba(245, 130, 135, 0.065);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.request-feedback p {
+  margin: 0;
+}
+.request-feedback:focus-visible {
+  outline: 2px solid var(--lime, #c7f36b);
+  outline-offset: 3px;
+}
+.request-feedback-retry {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted, #aaa);
+}
+.request-feedback-details {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #aaa);
+}
+.request-feedback-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.request-feedback-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.request-feedback-details code {
+  font-size: 11px;
+}
+.request-feedback-details button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border, #303334);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.request-feedback-details button:focus-visible,
+.request-feedback-details summary:focus-visible {
+  outline: 2px solid var(--lime, #c7f36b);
+  outline-offset: 3px;
+}
+.request-feedback-details small {
+  display: block;
+  margin-top: 5px;
+}

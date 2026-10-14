@@ -13,9 +13,14 @@ import {
   ShieldCheck,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import "./login.css";
 import { safeReturnTo } from "@/lib/navigation";
+import { api, RequestError } from "@/lib/client-api";
+import {
+  RequestFeedback,
+  useRetryCountdown,
+} from "../components/request-feedback";
 
 function returnDestination() {
   const target = new URLSearchParams(window.location.search).get("returnTo");
@@ -39,50 +44,34 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const errorRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (error) errorRef.current?.focus();
-  }, [error]);
+  const [error, setError] = useState<unknown>(null);
+  const retryRemaining = useRetryCountdown(error);
+  const submittingRef = useRef(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (submitting) return;
-    setError("");
+    if (submittingRef.current || retryRemaining > 0) return;
+    submittingRef.current = true;
+    setError(null);
     setSubmitting(true);
     try {
-      const response = await fetch(
-        registering ? "/api/auth/register" : "/api/auth/login",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), password }),
-        },
-      );
-      const body: unknown = await response.json();
-      if (!response.ok) {
-        const message =
-          body &&
-          typeof body === "object" &&
-          "error" in body &&
-          typeof body.error === "string"
-            ? body.error
-            : "Your request could not be completed. Please try again.";
-        throw new Error(message);
-      }
+      await api(registering ? "/api/auth/register" : "/api/auth/login", {
+        email: email.trim(),
+        password,
+      });
+      setPassword("");
+      setShowPassword(false);
       window.location.assign(returnDestination());
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to connect. Please try again.",
-      );
+      setError(err);
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
   const switchMode = () => {
     setRegistering((value) => !value);
-    setError("");
+    if (!(error instanceof RequestError && error.status === 429))
+      setError(null);
     setPassword("");
     setShowPassword(false);
   };
@@ -233,20 +222,11 @@ export default function LoginPage() {
                 </span>
               )}
             </div>
-            {error && (
-              <div
-                className="login-error"
-                ref={errorRef}
-                role="alert"
-                tabIndex={-1}
-              >
-                {error}
-              </div>
-            )}
+            <RequestFeedback error={error} />
             <button
               className="login-submit"
               type="submit"
-              disabled={submitting}
+              disabled={submitting || retryRemaining > 0}
             >
               {submitting ? (
                 <>

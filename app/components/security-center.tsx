@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
+import { RequestFeedback, useRetryCountdown } from "./request-feedback";
 import type {
   SecurityAction,
   SecurityMutationResponse,
@@ -49,7 +50,7 @@ export function SecurityCenter({
   activityHref: string;
 }) {
   const [data, setData] = useState<SecuritySnapshot | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const [retry, setRetry] = useState(0);
   const [confirmation, setConfirmation] = useState<
     SessionSummary | "others" | null
@@ -58,12 +59,13 @@ export function SecurityCenter({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState("");
+  const [passwordError, setPasswordError] = useState<unknown>(null);
   const [success, setSuccess] = useState("");
-  const errorRef = useRef<HTMLParagraphElement>(null);
-  const formErrorRef = useRef<HTMLParagraphElement>(null);
-  const dialogErrorRef = useRef<HTMLParagraphElement>(null);
-  const [dialogError, setDialogError] = useState("");
+  const [dialogError, setDialogError] = useState<unknown>(null);
+  const [mutationError, setMutationError] = useState<unknown>(null);
+  const retryRemaining = useRetryCountdown(mutationError);
+  const loadRetryRemaining = useRetryCountdown(error);
+  const mutationInFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -77,38 +79,25 @@ export function SecurityCenter({
       .then((security) => {
         if (!controller.signal.aborted) {
           setData(security);
-          setError("");
+          setError(null);
         }
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load account security.",
-        );
+        setError(err);
         connectionError(err);
       });
     return () => controller.abort();
   }, [load, version, retry, connectionError]);
-  useEffect(() => {
-    if (error) errorRef.current?.focus();
-  }, [error]);
-  useEffect(() => {
-    if (passwordError) formErrorRef.current?.focus();
-  }, [passwordError]);
-  useEffect(() => {
-    if (dialogError) dialogErrorRef.current?.focus();
-  }, [dialogError]);
   useEffect(() => {
     onDialogChange(Boolean(confirmation));
     return () => onDialogChange(false);
   }, [confirmation, onDialogChange]);
   const changePassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || mutationInFlight.current || retryRemaining > 0) return;
     setSuccess("");
-    setPasswordError("");
+    setPasswordError(null);
     if (newPassword.length < 12 || newPassword.length > 128) {
       setPasswordError("Use a new password between 12 and 128 characters.");
       return;
@@ -117,6 +106,7 @@ export function SecurityCenter({
       setPasswordError("The new passwords do not match.");
       return;
     }
+    mutationInFlight.current = true;
     try {
       const result = await mutate({
         type: "change-password",
@@ -129,21 +119,24 @@ export function SecurityCenter({
       setNewPassword("");
       setConfirmPassword("");
       setShowPassword(false);
+      setMutationError(null);
       setSuccess(
         `Password changed. Your current session was renewed and ${result.revokedSessions} previous ${result.revokedSessions === 1 ? "session was" : "sessions were"} closed.`,
       );
     } catch (err) {
-      if (mounted.current)
-        setPasswordError(
-          err instanceof Error
-            ? err.message
-            : "Unable to change your password.",
-        );
+      if (mounted.current) {
+        setPasswordError(err);
+        setMutationError(err);
+      }
+    } finally {
+      mutationInFlight.current = false;
     }
   };
   const revoke = async () => {
-    if (!confirmation || busy) return;
-    setDialogError("");
+    if (!confirmation || busy || mutationInFlight.current || retryRemaining > 0)
+      return;
+    setDialogError(null);
+    mutationInFlight.current = true;
     try {
       const result = await mutate(
         confirmation === "others"
@@ -153,16 +146,17 @@ export function SecurityCenter({
       if (!mounted.current) return;
       setData(result.security);
       setConfirmation(null);
+      setMutationError(null);
       setSuccess(
         `${result.revokedSessions} ${result.revokedSessions === 1 ? "session" : "sessions"} closed. Your current session is still active.`,
       );
     } catch (err) {
-      if (mounted.current)
-        setDialogError(
-          err instanceof Error
-            ? err.message
-            : "Unable to close the selected sessions.",
-        );
+      if (mounted.current) {
+        setDialogError(err);
+        setMutationError(err);
+      }
+    } finally {
+      mutationInFlight.current = false;
     }
   };
   const others = Math.max(0, (data?.sessionCount ?? 1) - 1);
@@ -180,16 +174,23 @@ export function SecurityCenter({
           <ShieldCheck size={26} />
         </span>
       </div>
-      {error && (
-        <p ref={errorRef} tabIndex={-1} className="notice error" role="alert">
-          {error}
+      {Boolean(error) && (
+        <div>
+          <RequestFeedback
+            error={error}
+            fallback="Unable to load account security."
+          />
           <Button
             variant="secondary"
+            disabled={loadRetryRemaining > 0}
             onClick={() => setRetry((value) => value + 1)}
           >
             Try again
           </Button>
-        </p>
+        </div>
+      )}
+      {retryRemaining > 0 && !confirmation && !passwordError && (
+        <RequestFeedback error={mutationError} focus={false} />
       )}
       {success && (
         <div className="security-success" role="status">
@@ -248,9 +249,9 @@ export function SecurityCenter({
                 </div>
                 <Button
                   variant="secondary"
-                  disabled={busy || !others}
+                  disabled={busy || retryRemaining > 0 || !others}
                   onClick={() => {
-                    setDialogError("");
+                    setDialogError(null);
                     setConfirmation("others");
                   }}
                 >
@@ -301,14 +302,14 @@ export function SecurityCenter({
                     </div>
                     <Button
                       variant="ghost"
-                      disabled={busy || session.isCurrent}
+                      disabled={busy || retryRemaining > 0 || session.isCurrent}
                       title={
                         session.isCurrent
                           ? "Use Sign out in the navigation to close your current session."
                           : "Close this session"
                       }
                       onClick={() => {
-                        setDialogError("");
+                        setDialogError(null);
                         setConfirmation(session);
                       }}
                     >
@@ -383,17 +384,11 @@ export function SecurityCenter({
                   maxLength={128}
                   disabled={busy}
                 />
-                {passwordError && (
-                  <p
-                    ref={formErrorRef}
-                    tabIndex={-1}
-                    className="inline-error"
-                    role="alert"
-                  >
-                    {passwordError}
-                  </p>
-                )}
-                <Button type="submit" disabled={busy}>
+                <RequestFeedback
+                  error={passwordError}
+                  fallback="Unable to change your password."
+                />
+                <Button type="submit" disabled={busy || retryRemaining > 0}>
                   {busy ? (
                     <LoaderCircle className="spin" size={16} />
                   ) : (
@@ -489,16 +484,10 @@ export function SecurityCenter({
                       ? `All ${others} other active sessions will be signed out. This browser stays connected.`
                       : `The selected browser session, created ${fullDate(confirmation.createdAt)}, will lose access immediately. This browser stays connected.`}
                   </p>
-                  {dialogError && (
-                    <p
-                      ref={dialogErrorRef}
-                      tabIndex={-1}
-                      className="inline-error"
-                      role="alert"
-                    >
-                      {dialogError}
-                    </p>
-                  )}
+                  <RequestFeedback
+                    error={dialogError}
+                    fallback="Unable to close the selected sessions."
+                  />
                 </div>
                 <div className="modal-foot">
                   <Button
@@ -508,7 +497,11 @@ export function SecurityCenter({
                   >
                     Cancel
                   </Button>
-                  <Button variant="danger" disabled={busy} onClick={revoke}>
+                  <Button
+                    variant="danger"
+                    disabled={busy || retryRemaining > 0}
+                    onClick={revoke}
+                  >
                     {busy ? (
                       <LoaderCircle className="spin" size={16} />
                     ) : (

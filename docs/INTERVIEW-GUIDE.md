@@ -53,6 +53,8 @@ Use Security and Activity to explain the account boundary. A public session ID s
 
 Audit pagination queries account-owned rows across the complete history rather than treating the overview's latest 30 entries as complete. Canonical dashboard URLs preserve inspection state and event links while every API read still checks account ownership. A copied event URL is a navigation instruction, not an authorization grant.
 
+Explain why API failures have stable codes: changing an English error message should not decide whether the client signs someone out. A server-owned request ID links an unexpected failure to its minimal log without copying the exception or submitted data into the response. The command palette uses the complete ownership-scoped history API, cancels obsolete searches, and applies a selected destination after its dialog closes. The compiled HTTP runner then checks the real routes and worker against an isolated temporary database in CI.
+
 1. `lib/contracts.ts`: name the states and allowed actions.
 2. `db/schema.ts` and `drizzle/`: find ownership, unique constraints, attempts, and leases.
 3. `lib/server/auth.ts`, `context.ts`, and API handlers: follow password hashing, session verification, identity, and validation.

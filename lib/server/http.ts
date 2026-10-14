@@ -5,6 +5,7 @@ import type {
   DeliveryQuery,
   ReplayBatchRequest,
   AuditQuery,
+  ApiFailure,
   SecurityAction,
 } from "../contracts.ts";
 
@@ -350,21 +351,40 @@ export function json(value: unknown, status = 200): Response {
 }
 
 export async function route(run: () => Promise<Response>): Promise<Response> {
+  const requestId = crypto.randomUUID();
+  let response: Response;
   try {
-    return await run();
+    response = await run();
   } catch (error) {
-    if (error instanceof ApiError)
-      return json({ error: error.message }, error.status);
-    console.error(
-      "RelayForge request failed",
-      error instanceof Error ? error.name : "UnknownError",
-    );
-    return json(
-      {
-        error:
-          "The service could not complete this request. Try again shortly.",
-      },
-      500,
-    );
+    if (error instanceof ApiError) {
+      response = json(
+        {
+          error: error.message,
+          code: error.code,
+          requestId,
+        } satisfies ApiFailure,
+        error.status,
+      );
+    } else {
+      // Request identifiers support diagnosis without logging untrusted exception
+      // names, messages, stacks, URLs, credentials or request payloads.
+      console.error(
+        "RelayForge request failed",
+        requestId,
+        error instanceof Error ? "Error" : "NonError",
+      );
+      response = json(
+        {
+          error:
+            "The service could not complete this request. Try again shortly.",
+          code: "internal_error",
+          requestId,
+        } satisfies ApiFailure,
+        500,
+      );
+    }
   }
+  // The server owns this value; incoming or downstream IDs are never trusted.
+  response.headers.set("x-request-id", requestId);
+  return response;
 }

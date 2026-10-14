@@ -8,13 +8,15 @@ The Recovery workspace brings failed deliveries into one view. Select up to 20 r
 
 The Security workspace shows active sessions, lets you revoke other sessions, and changes your password after checking the current one. Activity searches the complete account-owned delivery and security audit history. Navigation, filters, pagination, and event drawers have shareable URLs that survive reloads and browser history navigation.
 
+Press **Ctrl/Cmd + K**, or use the toolbar's command button, to find a screen, receiver, or event. Type at least two characters to search the complete delivery history, then use arrow keys and Enter to open a result. Escape closes the palette and returns focus. Searches stay scoped to your account.
+
 This is a working portfolio MVP. Its receivers are controlled demonstrations. A standalone worker advances the persistent queue without a browser; dashboard requests provide a fallback when no recent worker heartbeat is observed. It makes reliability behavior inspectable without claiming to be a production delivery service.
 
 [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Interview guide](docs/INTERVIEW-GUIDE.md) · [Security](docs/SECURITY.md) · [Roadmap](docs/ROADMAP.md)
 
 ![RelayForge dashboard with persisted events, attempt metrics, and controlled receivers](docs/preview.jpg)
 
-[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg) · [Recovery workspace](docs/recovery-preview.jpg) · [Mobile recovery](docs/recovery-mobile-preview.jpg) · [Security workspace](docs/security-preview.jpg) · [Audit explorer](docs/audit-preview.jpg) · [Mobile security](docs/security-mobile-preview.jpg)
+[Account screen](docs/login-preview.jpg) · [Mobile dashboard](docs/mobile-preview.jpg) · [Worker and engineering view](docs/worker-preview.jpg) · [Recovery workspace](docs/recovery-preview.jpg) · [Mobile recovery](docs/recovery-mobile-preview.jpg) · [Security workspace](docs/security-preview.jpg) · [Audit explorer](docs/audit-preview.jpg) · [Mobile security](docs/security-mobile-preview.jpg) · [Command palette](docs/command-preview.jpg) · [Mobile commands](docs/command-mobile-preview.jpg)
 
 ## Try the failure path
 
@@ -117,26 +119,33 @@ It checks authentication, same-origin protection, account isolation, duplicate s
 
 With the same local server running, `npm run security:smoke` checks session revocation, password rotation, strict security/audit requests, and audit isolation using separate synthetic accounts. It changes only its own test account's password. The checks leave their test records in the local database.
 
+`npm run request:smoke` checks the API failure contract, server-owned request IDs, privacy, and rate-limit responses using synthetic accounts. API failures retain their readable `error` message and add a stable `code` and `requestId`. Login and Security display rate-limit waiting periods; error details expose only a validated request ID for diagnosis.
+
+After `npm run build`, run **`npm run verify:http`** to execute all three HTTP checks with a separately launched web server and worker on a loopback port. This runner uses a new temporary database, shuts down its own processes, and removes that temporary directory. It does not use the local application's database. CI runs this compiled HTTP verification after the build.
+
 No throughput, availability, or latency benchmark is claimed. Dashboard durations describe controlled receiver attempts; they do not measure external network performance. Each workspace accepts up to 500 events. The overview snapshot returns the latest 100 deliveries; the delivery-history API pages through the workspace's full accepted history with server-side search, status, and endpoint filters.
 
 ## Code map
 
-| Path                     | Responsibility                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `app/`                   | Dashboard and HTTP route entry points                                                 |
-| `lib/contracts.ts`       | Shared actions, snapshot, paginated delivery-history, and detail types                |
-| `lib/server/auth.ts`     | Credential validation, password hashing, session lifecycle, and authentication limits |
-| `lib/server/audit.ts`    | Unified account-owned delivery and security audit queries                             |
-| `lib/navigation.ts`      | Canonical URL state and safe local sign-in return destinations                        |
-| `lib/server/database.ts` | Native SQLite adapter, transactional batches, and migration tracking                  |
-| `lib/server/service.ts`  | Acceptance, leases, processing, receiver effects, and snapshots                       |
-| `lib/server/worker.ts`   | Autonomous queue passes, worker heartbeat, and graceful shutdown                      |
-| `scripts/worker.mjs`     | Node.js worker entry point and local environment loading                              |
-| `lib/server/domain.ts`   | Retry policy, canonical JSON, hashing, and signatures                                 |
-| `lib/server/http.ts`     | Runtime validation, request bounds, and API errors                                    |
-| `db/` and `drizzle/`     | Database schema and committed migrations                                              |
-| `tests/`                 | Reproducible reliability checks                                                       |
-| `docs/`                  | Architecture, demo narrative, and next milestones                                     |
+| Path                      | Responsibility                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `app/`                    | Dashboard and HTTP route entry points                                                 |
+| `lib/contracts.ts`        | Shared actions, snapshot, paginated delivery-history, and detail types                |
+| `lib/server/auth.ts`      | Credential validation, password hashing, session lifecycle, and authentication limits |
+| `lib/server/audit.ts`     | Unified account-owned delivery and security audit queries                             |
+| `lib/navigation.ts`       | Canonical URL state and safe local sign-in return destinations                        |
+| `lib/commands.ts`         | Bounded command search and canonical navigation destinations                          |
+| `lib/client-api.ts`       | Shared HTTP decoding, failure codes, request IDs, and retry metadata                  |
+| `lib/server/database.ts`  | Native SQLite adapter, transactional batches, and migration tracking                  |
+| `lib/server/service.ts`   | Acceptance, leases, processing, receiver effects, and snapshots                       |
+| `lib/server/worker.ts`    | Autonomous queue passes, worker heartbeat, and graceful shutdown                      |
+| `scripts/worker.mjs`      | Node.js worker entry point and local environment loading                              |
+| `scripts/verify-http.mjs` | Isolated compiled web/worker runtime and bounded HTTP smoke verification              |
+| `lib/server/domain.ts`    | Retry policy, canonical JSON, hashing, and signatures                                 |
+| `lib/server/http.ts`      | Runtime validation, request bounds, and API errors                                    |
+| `db/` and `drizzle/`      | Database schema and committed migrations                                              |
+| `tests/`                  | Reproducible reliability checks                                                       |
+| `docs/`                   | Architecture, demo narrative, and next milestones                                     |
 
 Start with [the architecture](docs/ARCHITECTURE.md) to follow acceptance, claim, receiver handling, and completion. The [interview guide](docs/INTERVIEW-GUIDE.md) covers the tradeoffs worth explaining before adding features.
 
