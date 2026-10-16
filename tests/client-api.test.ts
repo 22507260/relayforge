@@ -91,11 +91,30 @@ test("shared API preserves authenticated GET and JSON mutation request contracts
         { ok: true },
       );
       await api("/api/action", { type: "pump" });
+      await api(
+        "/api/connections/test",
+        { enabled: false, expectedRevision: 1 },
+        controller.signal,
+        "PATCH",
+      );
+      await api(
+        "/api/producer-keys/test",
+        undefined,
+        controller.signal,
+        "DELETE",
+      );
       assert.equal(calls[0].options?.credentials, "same-origin");
       assert.equal(calls[0].options?.cache, "no-store");
       assert.equal(calls[0].options?.signal, controller.signal);
       assert.equal(calls[1].options?.method, "POST");
       assert.equal(calls[1].options?.body, '{"type":"pump"}');
+      assert.equal(calls[2].options?.method, "PATCH");
+      assert.equal(calls[2].options?.credentials, "same-origin");
+      assert.equal(calls[2].options?.signal, controller.signal);
+      assert.equal(calls[3].options?.method, "DELETE");
+      assert.equal(calls[3].options?.credentials, "same-origin");
+      assert.equal(calls[3].options?.body, undefined);
+      assert.equal(calls[3].options?.headers, undefined);
     },
   );
 });

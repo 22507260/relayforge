@@ -1,16 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as wait } from "node:timers/promises";
+import {
+  setTimeout as wait,
+  setImmediate as yieldToEventLoop,
+} from "node:timers/promises";
 import { MAX_ATTEMPTS, WORKER_HEARTBEAT_TTL_MS } from "./domain.ts";
 import { RelayService } from "./service.ts";
 import type { SqlDatabase } from "./sql.ts";
+import { LiveTransport } from "./transport.ts";
 
 export const WORKER_INTERVAL_MS = 1_000;
 const WORKSPACES_PER_TICK = 100;
 const STALE_HEARTBEATS_PER_TICK = 100;
+export const WORKER_NETWORK_CONCURRENCY = 4;
+export const WORKER_HEARTBEAT_INTERVAL_MS = 2_000;
 
 interface WorkerOptions {
   clock?: () => number;
   onError?: (error: unknown) => void;
+  transport?: LiveTransport;
 }
 
 /** A separate process schedules the same owner-scoped, lease-protected processor. */
@@ -20,16 +27,19 @@ export class RelayWorker {
   private readonly clock: () => number;
   private readonly onError: (error: unknown) => void;
   private readonly startedAt: number;
+  private readonly transport: LiveTransport;
   private inFlight: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
   private stopped = false;
   private running = false;
+  private ownerCursor: string | null = null;
 
   constructor(db: SqlDatabase, options: WorkerOptions = {}) {
     this.db = db;
     this.clock = options.clock ?? Date.now;
     this.onError = options.onError ?? (() => undefined);
     this.startedAt = this.clock();
+    this.transport = options.transport ?? new LiveTransport();
   }
 
   private async heartbeat(): Promise<void> {
@@ -56,34 +66,82 @@ export class RelayWorker {
       .run();
     await this.heartbeat();
 
-    // Owners come only from durable server state. Browser input cannot pick one.
-    const owners = await this.db
-      .prepare(
-        `SELECT d.owner FROM deliveries d
+    let heartbeatTask: Promise<void> | null = null;
+    const heartbeatTimer = setInterval(() => {
+      if (heartbeatTask) return;
+      heartbeatTask = this.heartbeat()
+        .catch(this.onError)
+        .finally(() => {
+          heartbeatTask = null;
+        });
+    }, WORKER_HEARTBEAT_INTERVAL_MS);
+    try {
+      // Owners come only from durable server state. Browser input cannot pick one.
+      const findOwners = (cursor: string | null) =>
+        this.db
+          .prepare(
+            `SELECT d.owner FROM deliveries d
          JOIN workspaces w ON w.owner = d.owner
-         WHERE w.queue_paused = 0 AND (
+         JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner
+         WHERE w.queue_paused = 0 AND (? IS NULL OR d.owner > ?) AND (
            (d.lease_token IS NOT NULL AND d.lease_until <= ?) OR
            (d.lease_token IS NULL AND d.status IN ('pending', 'retrying')
-            AND d.next_attempt_at <= ? AND d.attempts < ?)
+            AND d.next_attempt_at <= ? AND d.attempts < ? AND e.enabled = 1)
          )
          GROUP BY d.owner
-         ORDER BY MIN(CASE WHEN d.lease_token IS NOT NULL THEN d.lease_until ELSE d.next_attempt_at END), d.owner
+         ORDER BY d.owner
          LIMIT ?`,
-      )
-      .bind(now, now, MAX_ATTEMPTS, WORKSPACES_PER_TICK)
-      .all<{ owner: string }>();
+          )
+          .bind(cursor, cursor, now, now, MAX_ATTEMPTS, WORKSPACES_PER_TICK)
+          .all<{ owner: string }>();
+      let owners = await findOwners(this.ownerCursor);
+      if (!owners.results.length && this.ownerCursor !== null)
+        owners = await findOwners(null);
+      this.ownerCursor = owners.results.at(-1)?.owner ?? null;
 
-    for (const { owner } of owners.results) {
-      if (this.stopped || signal?.aborted) break;
-      await this.heartbeat();
-      try {
-        await new RelayService(this.db, owner, this.clock).pump();
-      } catch (error) {
-        // A failed workspace does not prevent other workspaces from progressing.
-        this.onError(error);
+      // Admission happens before a claim. Every owner gets a turn each round.
+      const noProgressOwners = new Set<string>();
+      for (
+        let round = 0;
+        round < 12 && !this.stopped && !signal?.aborted;
+        round++
+      ) {
+        let nextOwner = 0;
+        const lane = async () => {
+          while (!this.stopped && !signal?.aborted) {
+            const index = nextOwner++;
+            if (index >= owners.results.length) return;
+            const { owner } = owners.results[index];
+            if (noProgressOwners.has(owner)) continue;
+            try {
+              const processed = await new RelayService(
+                this.db,
+                owner,
+                this.clock,
+              ).pump({
+                allowLive: true,
+                limit: 1,
+                transport: this.transport,
+              });
+              if (processed === 0) noProgressOwners.add(owner);
+            } catch (error) {
+              // A failed workspace does not prevent other workspaces progressing.
+              this.onError(error);
+              noProgressOwners.add(owner);
+            }
+            await yieldToEventLoop();
+          }
+        };
+        await Promise.all(
+          Array.from({ length: WORKER_NETWORK_CONCURRENCY }, lane),
+        );
+        await yieldToEventLoop();
       }
+      await this.heartbeat();
+    } finally {
+      clearInterval(heartbeatTimer);
+      await heartbeatTask;
     }
-    await this.heartbeat();
   }
 
   /** Calls share the current cycle; a timer cannot start an overlapping pump. */

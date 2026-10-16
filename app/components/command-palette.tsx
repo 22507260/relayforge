@@ -41,6 +41,7 @@ const viewIcons = {
   deliveries: Webhook,
   recovery: Wrench,
   endpoints: Unplug,
+  studio: SquareTerminal,
   activity: FileClock,
   engineering: SquareTerminal,
   security: ShieldCheck,
@@ -268,7 +269,10 @@ export function CommandPalette({
                     <span>{entry.detail}</span>
                   </span>
                   {entry.status ? (
-                    <StatusBadge status={entry.status} />
+                    <StatusBadge
+                      status={entry.status}
+                      transport={entry.transport}
+                    />
                   ) : (
                     <ArrowRight
                       className="command-palette-arrow"

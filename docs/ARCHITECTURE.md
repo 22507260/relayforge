@@ -1,180 +1,125 @@
 # Architecture
 
-RelayForge makes webhook recovery visible through a full stack application. Its persistent queue can be processed by a standalone worker, with dashboard requests as a fallback. It is designed for an inspectable demo and engineering discussion.
+RelayForge 2.0 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers.
 
 ## Data flow
 
 ```mermaid
 flowchart LR
-    Browser[React dashboard] -->|Snapshot and delivery detail| API[Next.js API]
-    Browser -->|Validated actions| API
-    API -->|Tenant-scoped reads and writes| DB[(SQLite)]
-    API -->|Request fallback| Processor[Delivery processor]
-    Worker[Standalone Node.js worker] -->|Process due work| Processor
-    Worker -->|Persist heartbeat| DB
-    Processor -->|Claim due work with a lease| DB
-    Processor -->|Signed envelope, in process| Receiver[Controlled receiver]
-    Receiver -->|Deduplicated demo effect| DB
-    Processor -->|Attempt and resulting state| DB
-    HTTP[Signed receiver HTTP route] --> Receiver
-    API -->|Persisted observations| Browser
+    Browser[Dashboard and Integration Studio] -->|Session and same-origin management| API[Next.js API]
+    Producer[Producer application] -->|Scoped bearer key and idempotency key| Ingest[POST /api/v1/events]
+    API --> DB[(Application SQLite)]
+    Ingest -->|Transactional authority, quota and acceptance| DB
+    API -->|Demo-only fallback| Lab[Controlled lab receiver]
+    Worker[Standalone worker] -->|Leased claims and independent heartbeat| DB
+    Worker -->|Signed request and pinned public address| HTTPS[Allowed HTTPS receiver]
+    Worker -->|Signed fixed local HTTP request| Reference[Independent reference receiver]
+    Worker --> Lab
+    Reference -->|Transactional deduplication and effect| ReceiverDB[(Receiver SQLite)]
+    Lab -->|Deduplicated lab effect| DB
+    Worker -->|Fenced result and retry state| DB
+    DB -->|Persisted observations| API
 ```
 
-These are logical boundaries sharing one database and delivery implementation. The web application and worker run in separate processes. In either process, the processor calls `RelayService.receive()` directly; it does not send outbound HTTP requests. A signed HTTP receiver route reuses the same logic. This structure exercises signature verification and delivery state without claiming actual external delivery.
+The reference receiver has its own database and per-connection verification configuration. It does not read the application database or encryption master key. HTTPS receivers operate outside RelayForge's storage boundary: a 2xx response proves acknowledgement, not a remote business effect.
 
-## HTTP and shared contracts
+## HTTP boundaries
 
-| Route                       | Purpose                                                             | Authentication                                 |
-| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
-| `POST /api/auth/register`   | Create an email/password account and a session                      | Same-origin checks and validated credentials   |
-| `POST /api/auth/login`      | Verify credentials and create a session                             | Same-origin checks and validated credentials   |
-| `POST /api/auth/logout`     | Revoke the current session                                          | Session and same-origin checks                 |
-| `GET /api/snapshot`         | Read persisted queue state without advancing processing             | Application session                            |
-| `GET /api/deliveries`       | Search and page through tenant-owned delivery history               | Application session                            |
-| `GET /api/security`         | Inspect account-owned active sessions and recent security events    | Application session                            |
-| `POST /api/security`        | Revoke other sessions or verify and change the account password     | Application session and same-origin checks     |
-| `GET /api/audit`            | Search and page through delivery and security audit records         | Application session                            |
-| `POST /api/action`          | Initialize, send, demo, set receiver mode, replay, pause, or pump   | Application session and same-origin checks     |
-| `POST /api/recovery/replay` | Replay up to 20 selected dead standard deliveries with cycle guards | Application session and same-origin checks     |
-| `GET /api/deliveries/:id`   | Read one tenant-owned delivery and its attempts                     | Application session                            |
-| `POST /api/receiver/:id`    | Verify a signed envelope and invoke a controlled receiver           | HMAC; no browser session required by the route |
+| Route                                                      | Responsibility                                        | Authority                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
+| `POST /api/auth/register`, `/login`, `/logout`             | Account and session lifecycle                         | Validated credentials or session; same origin |
+| `GET /api/snapshot`                                        | Persisted observations without queue progress         | Application session                           |
+| `GET /api/deliveries`, `/api/deliveries/:id`               | Full history, filters, and event detail               | Account-owned session                         |
+| `GET /api/connections`                                     | Connection metadata and operator capabilities         | Application session                           |
+| `POST /api/connections`                                    | Create an immutable destination and signing key       | Session, same origin, strict JSON             |
+| `PATCH /api/connections/:id`                               | Enable or disable using `expectedRevision`            | Account ownership, session, same origin       |
+| `POST /api/connections/:id/rotate`                         | Rotate signing key with a revision guard              | Account ownership, session, same origin       |
+| `POST /api/connections/:id/events`                         | Studio acceptance into the persistent queue           | Account ownership, session, same origin       |
+| `GET /api/producer-keys`                                   | Public key metadata                                   | Application session                           |
+| `POST /api/producer-keys`, `DELETE /api/producer-keys/:id` | Create a scoped token or revoke it                    | Account ownership, session, same origin       |
+| `POST /api/v1/events`                                      | Producer acceptance                                   | Bearer key only; one connection per key       |
+| `POST /api/action`                                         | Lab behavior, send, replay, pause, and demo-only pump | Session, same origin, strict JSON             |
+| `POST /api/recovery/replay`                                | Up to 20 cycle-guarded dead deliveries                | Session, same origin, ownership               |
+| `GET /api/security`, `POST /api/security`                  | Session inspection, revocation, password rotation     | Session; mutations require same origin        |
+| `GET /api/audit`                                           | Complete delivery and security audit history          | Account-owned session                         |
+| `POST /api/receiver/:id`                                   | Signed controlled lab envelope                        | HMAC; demo transport only                     |
 
-Accounts and sessions belong to the application. A browser request establishes identity through its session cookie; client-supplied identity headers and owner IDs are not trusted.
+Session identity comes from an opaque cookie, not an owner ID or identity header submitted by the browser. The producer route has a separate bearer boundary and derives both owner and connection from its key. It cannot use a browser session as a substitute.
 
-The `/login` page supports account creation and sign-in. The server validates emails and passwords, including the 12–128 character password bound. The database defaults to `.data/relayforge.sqlite`; `DATABASE_PATH` can select a persistent deployment path. Committed migrations apply on database initialization and can also be run explicitly through `npm run db:migrate`.
+Requests are limited to 16 KiB, payloads to 12 KiB, JSON depth to 24, and traversal to 2,000 nodes. History queries reject unknown or repeated parameters, bound pagination and search, and scope count and rows to one account. API errors include readable `error`, stable `code`, and server-generated `requestId`; unexpected failures do not return exception details or submitted data.
 
-Passwords use salted scrypt hashing. Sessions contain a random opaque token; only its SHA-256 hash is stored in the database. The session expires after seven days. Its cookie is HttpOnly and SameSite=Lax, with Secure enabled in production. Sign-out revokes the stored session. Authentication attempts are bounded by persistent ten-minute counters: ten per normalized email and 100 across the application.
+## Acceptance and delivery
 
-## Account security and inspection
-
-Security session summaries use a separate random public ID, never the authentication token or its hash. The response includes the total active count, at most 50 active session rows with the current one first, and the latest 20 account security events. Last request timestamps are updated at most once per minute without extending seven-day expiry. Legacy sessions receive public IDs during migration and retain unknown last-request times until used.
-
-Session revocation checks both ownership and the authorizing session within the write transaction. Password changes verify the current password asynchronously, then recheck the password hash and current unexpired session under the write lock. Password replacement, creation of one fresh session, revocation of previous sessions, and the security audit entry commit together. The response sets a fresh HttpOnly cookie. Sign-in rechecks the hash it verified before inserting its session, preventing an old-password verification from establishing a session after a concurrent password change. A separate five-per-ten-minute account counter bounds security mutation attempts.
-
-The audit API unions account-owned delivery activity and security events. It accepts `page` (1–500), `pageSize` (1–50), `category` (`all`, `delivery`, `security`), a known `kind`, `search` (up to 100 characters), `eventId`, `operationId`, and inclusive `from`/`to` millisecond timestamps. Unknown or duplicated parameters, malformed bounds, and reversed date ranges return `400`. Search treats characters literally. Count and rows share one batch, with pages clamped to the matching history and ties ordered by timestamp descending, category ascending, then ID descending. Replay operation IDs allow an operator to inspect records written by the same operation.
-
-The dashboard stores view, filters, page, size, and optional event drawer in canonical query parameters on `/`. `lib/navigation.ts` parses and bounds URL state; `pushState` supports navigation and `replaceState` supports debounced search without a history entry for every keystroke. Activity's `auditEvent` filters its history independently of `event`, which opens a detail drawer. API parameter names are mapped explicitly from URL state. Event controls have ordinary links for copying or opening another tab. Reload and Back/Forward reconstruct the same state; login preserves a validated local dashboard `returnTo`. URLs contain identifiers and filters, while payloads remain authenticated API data.
-
-The command palette searches screen and receiver destinations locally and calls the authenticated delivery-history API for event results. Remote queries require two characters, are debounced, and return at most six events. Query changes abort earlier work and ignore stale responses. The combobox retains DOM focus while its active descendant identifies the highlighted listbox option. A selection closes the palette before changing the URL or opening the event drawer, so two modal focus traps do not overlap. Navigation does not execute queue or account mutations.
-
-## API failures and compiled verification
-
-Every route-wrapped API response has a server-generated UUID in `X-Request-ID`; incoming IDs are ignored. Failure JSON retains `error` and adds `code` and the same `requestId`. Stable codes distinguish an ended session, invalid sign-in credentials, an incorrect current password, and a session changed during password work. The client uses these codes instead of matching an English sentence. Unexpected server exceptions produce a generic `500` and log only the request ID and a fixed error category, excluding exception names, messages, stacks, URLs, tokens, and payloads.
-
-The shared client decoder handles network failures, malformed responses, cancellation, validated error metadata, and bounded `Retry-After` values. Login and Security use the rate-limit deadline to prevent immediate repeated submission and show the remaining wait. These controls improve feedback; the persistent server counters remain the authority. Request IDs correlate a response with the minimal server failure log, and are separate from replay operation IDs, audit record IDs, and authentication tokens.
-
-`npm run verify:http` starts the compiled web application and worker against one new temporary SQLite database on a loopback port. It executes the delivery, account-security, and failure-contract HTTP scripts sequentially, bounds startup and each check, then stops only its own child processes and removes its checked temporary directory. CI runs it after the production build. The runner tests controlled receivers and local HTTP contracts; it does not establish external delivery or production operations.
-
-`lib/contracts.ts` defines `Action`, `Snapshot`, `DeliveryPage`, `DeliveryDetail`, and the visible states. The server validates incoming actions with Zod because TypeScript types do not constrain arbitrary request JSON. The snapshot includes the authenticated account's ID and email, describes the observed processor mode using the worker heartbeat, and exposes the retry cap, workspace event limit, and snapshot limit. Signing secrets, password hashes, and session tokens are excluded.
-
-The delivery-history endpoint accepts `page` (1–500, default 1), `pageSize` (1–50, default 20), `search` (up to 100 characters), `status` (`all`, `pending`, `retrying`, `delivered`, or `dead`), and `endpointId` (`all` or an endpoint ID). Unknown or duplicated parameters and invalid values return `400`. Search matches literal text in event IDs, event types, and endpoint names; `%` and `_` have no wildcard meaning. All query conditions remain scoped to the authenticated account.
-
-The history response returns deliveries, the total matching count, the requested page and page size, and the number of pages. Count and page rows are read in one database batch. Ordering uses creation time and insertion order to resolve equal timestamps. Each delivery includes its latest recorded attempt's status code, measured duration, error, and timestamps, or `null` when it has no attempt. An unfinished attempt has a null finish time and duration; it does not imply a timeout response. A recovered lease can have a finish time without an HTTP result, and its measured duration remains null.
-
-Each endpoint summary includes `lastDurationMs` from its latest finished attempt with a recorded HTTP response across the full workspace history. The value is null if no measured response exists and is independent of the snapshot's latest-100 delivery window. Interrupted leases do not replace this measurement with a default zero.
-
-## Delivery lifecycle
-
-1. **Accept.** Validate the action and tenant-owned endpoint. Canonicalize the payload, hash the payload and event type, and insert under a unique `(owner, endpoint_id, idempotency_key)` constraint. A matching duplicate returns the original event; a conflicting key returns `409`.
-2. **Claim.** A pump recovers expired leases, finds up to 12 due deliveries, then conditionally updates each to acquire a 15-second lease. The claim increments the current attempt budget and creates an attempt record in a database batch.
-3. **Attempt.** HMAC-sign the canonical envelope and call the controlled receiver. The receiver verifies signature, timestamp, event ownership, and immutable payload before applying its configured behavior.
-4. **Record.** Persist the attempt result and transition to delivered, retrying, or dead. Completion writes require the current lease token so a stale processor cannot overwrite a newer claim.
-5. **Recover.** Manual replay accepts a completed or dead delivery, preserves its ID and payload, resets the current attempt budget, and retains historical attempt records.
+1. **Accept:** validate the event and enabled owned connection; canonicalize payload data and insert under unique `(owner, endpoint_id, idempotency_key)`. Matching content returns the original event; changed event type or payload returns `409`.
+2. **Authorize producer acceptance:** recheck hashed bearer key, expiry, revocation, scope, enabled connection, and persistent minute quotas inside the same immediate transaction as enqueue. Producer data cannot choose another owner or connection.
+3. **Admit:** the worker has four processing lanes. A lane is available before an event is claimed. Each workspace gets a turn in successive rounds, bounded to 100 selected workspaces and 12 rounds per tick.
+4. **Prepare and claim:** live configuration and signing-key decryption must succeed before consuming an attempt. Disabled connections remain queued. A conditional update acquires a 15-second lease, increments the current budget, and records the attempt and connection revision.
+5. **Send:** demo work calls the controlled receiver; live work signs a stable envelope and performs a real bounded HTTP request. The reference transport uses its fixed local address; HTTPS resolves and pins validated public addresses.
+6. **Complete:** attempt observations, activity, and delivery state are written under the matching lease token. A stale worker cannot overwrite a newer claim.
+7. **Recover:** replay preserves event ID, payload, and producer idempotency key. It increments the cycle, resets its four-attempt budget, and keeps all earlier attempts.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: accepted
-    pending --> delivered: receiver acknowledges
-    pending --> retrying: failed attempt
-    retrying --> delivered: receiver acknowledges
-    retrying --> retrying: failure below attempt cap
-    pending --> dead: budget exhausted after lease recovery
-    retrying --> dead: attempt cap reached
-    dead --> pending: manual replay
-    delivered --> pending: manual replay
+    [*] --> pending: accepted and persisted
+    pending --> delivered: receiver returns 2xx
+    pending --> retrying: retryable failure below cap
+    retrying --> delivered: receiver returns 2xx
+    retrying --> retrying: retryable failure below cap
+    pending --> dead: terminal result or exhausted budget
+    retrying --> dead: terminal result or exhausted budget
+    dead --> pending: manual replay starts another cycle
+    delivered --> pending: manual replay starts another cycle
 ```
 
-Leasing is separate from visible status. A leased delivery can be pending or retrying. A delivery's `currentCycle` starts at one and increases on replay. Each new claim records that cycle with its attempt number. Old attempts have a null cycle and appear as Legacy history; migration does not guess boundaries from timestamps or repeated attempt numbers.
+Leasing is separate from visible status. An expired lease consumes its interrupted attempt; a subsequent worker marks the interruption and queues another eligible attempt or dead state. Old attempts whose cycle is null stay in **Legacy history**; migrations do not infer cycle boundaries.
 
-## Recovery workspace
+## Live transport
 
-Recovery reads the complete paginated delivery history with `status=dead`, rather than relying on the snapshot window. Its `POST /api/recovery/replay` request contains 1–20 unique `{eventId, expectedCycle}` selections. The response includes per-item replayed/skipped outcomes, the new cycle for successful items, and a snapshot. Skipped items have a null cycle, including inaccessible IDs.
+HTTPS destinations are immutable and limited to exact operator-configured DNS hostnames. Allowed URLs use HTTPS/443, contain no credentials, query, fragment, or IP literal, and are at most 2,048 characters. Hostnames are normalized and wildcards are unsupported. Changing a destination requires another connection.
 
-Bulk replay is best-effort for individual selections but one database transaction for the write operation. Only account-owned, dead, lease-free, standard-receiver records matching the selected cycle are eligible. A guarded audit insert and state update occur together; successful items retain identity and payload, increment their cycle, and reset the attempt budget. A database error rolls back all writes. Pause still blocks claims after queueing. Single-event replay applies the same audit/state consistency and supports an optional expected-cycle guard.
+Every attempt resolves A and AAAA records. All returned addresses must be public; mixed public/private answers are blocked. IPv4-mapped IPv6 is classified as IPv4, IPv6 special ranges are rejected conservatively, and zone identifiers are invalid. The request pins one validated address using a custom lookup while retaining the original hostname for Host, SNI, and normal TLS certificate verification. The transport creates its own direct request without proxy inheritance or shared-agent address reuse and does not follow redirects.
 
-The persisted Recovery Lab links one current event and one dedicated receiver to a workspace. Its stage is derived from durable delivery state, repair state, and receiver effects. Initial start is idempotent; replacing a completed scenario requires its previous event ID. The controlled receiver returns HTTP 500 until the failed event is repaired through the guide, then acknowledges its replay. Generic send, mode-change, and replay actions cannot operate that managed receiver. Old scenario events and attempts remain inspectable after a new scenario starts.
+A five-second total deadline covers DNS, connection, TLS, and response headers. Expiry cancels the resolver and destroys the request. Response headers are capped at 8 KiB, and response bodies are discarded. HTTP results retain their actual status; DNS, TLS, deadline, and network failures have a null status and a bounded failure category.
 
-Replay audit entries include the target cycle and an operation ID. The completion proof uses the guide event's own effect count, not the workspace-wide aggregate. The guide shares the existing processor, HMAC envelope, retry schedule, and lease fencing; it does not simulate progress with a browser timer.
+| Result                                                | Policy                                    |
+| ----------------------------------------------------- | ----------------------------------------- |
+| 2xx                                                   | Acknowledged; visible delivered state     |
+| Network/DNS/TLS/deadline failure                      | Retry below the four-attempt cap          |
+| HTTP 408, 429, 5xx                                    | Retry below the cap                       |
+| Other 3xx/4xx                                         | Terminal dead state                       |
+| Blocked destination or oversized response headers     | Terminal failure                          |
+| Missing/incorrect signing key or disabled live policy | Leave queued without consuming an attempt |
 
-The standalone worker checks persisted due work independently of HTTP requests and invokes the same tenant-scoped processor as the API. When no recent worker heartbeat is observed, the dashboard continues requesting pump actions as a fallback. A snapshot read never advances processing. Pause preserves queued data and blocks new claims in either process; it does not cancel work already claimed.
+Retries use the existing exponential base beginning at one second with ±20% jitter. A valid `Retry-After` on HTTP 429 or 503 can extend the schedule, up to 24 hours. Invalid or oversized values do not replace the policy.
 
-## Standalone worker
+## Keys and independent receiver
 
-`npm run worker` starts a Node.js 24 process using the application's native SQLite adapter, committed migrations, receiver behavior, and lease rules. Run it from the project directory with the same `DATABASE_PATH` as the web application. It does not need a browser, HTTP listener, or account session: local access to the database is the worker's authority. Its processing remains scoped to each stored workspace, and the HTTP APIs continue deriving user identity from authenticated sessions.
+Each live connection has random 32-byte HMAC signing material. AES-256-GCM encrypts it using a protected 32-byte master file outside the checkout. Authenticated associated data binds ciphertext to owner, connection, and key ID. There is no plaintext fallback. Creation and rotation reveal the signing secret once; regular connection metadata contains key IDs and timestamps only.
 
-`lib/server/worker.ts` owns processing passes and lifecycle handling; `scripts/worker.mjs` loads local environment configuration and starts the process. The worker writes its instance UUID, start time, and last observation time to the `worker_heartbeats` table. Snapshots expose `system.worker.activeWorkers` and `lastHeartbeatAt`, with processor mode `worker` or `request-driven`. An observation older than ten seconds is stale, so the dashboard switches to request-driven fallback. A recent heartbeat establishes that the worker wrote to this database recently. It does not prove that all queued work is progressing, the next retry will start at an exact time, or the receiver is healthy. Multiple processors still rely on conditional leases and completion tokens, rather than the heartbeat, for claim protection.
+Rotation uses the connection revision guard and commits key changes with audit state. The previous key stays valid for 24 hours and live attempts carry both signatures during that interval. A second rotation cannot start while an earlier grace period remains active.
 
-SIGINT and SIGTERM stop scheduling new passes and wait for an ongoing pump before the database closes. Forced process termination may leave a lease and unfinished attempt; a later worker or request pump recovers the expired lease. Run the web application and worker as separately supervised processes when deploying. Their storage and migrations must remain available, and their relative database paths must resolve to the same file.
+Producer keys are separately generated random tokens, stored as SHA-256 hashes with a public prefix. They have `events:write` scope for one enabled HTTPS/reference connection, expire in 1–90 days (default 90), and are capped at ten active keys per workspace. Persistent fixed-minute quotas allow 60 admitted requests per key and 240 per owner; duplicate submissions also use quota.
 
-## Policy and demo receivers
+The reference receiver verifies the timestamped HMAC and matching event/cycle headers, checks immutable content, and commits an effect and receipt in its own immediate transaction. Its uniqueness key is `(endpoint_id, event_id)`. In `lose-first-ack` mode, a newly committed effect is followed by a dropped socket; the sender records a network failure and retries the same event. The retry acknowledges the existing effect. Receiver storage supplies the evidence for one effect; the application's dashboard does not independently count that remote database.
 
-| Policy                | Current behavior                                          |
-| --------------------- | --------------------------------------------------------- |
-| Automatic attempt cap | Four attempts per cycle                                   |
-| Retry delay           | Exponential base starting at one second, with ±20% jitter |
-| Lease                 | 15 seconds; expiry consumes the interrupted attempt       |
-| Healthy receiver      | Acknowledges and deduplicates its demo effect             |
-| Flaky receiver        | Returns `503` for the first two attempts, then succeeds   |
-| Failing receiver      | Returns `500` until its mode changes                      |
-| Timeout receiver      | Waits 250 ms and reports a controlled `504`               |
-| Workspace capacity    | 500 accepted events                                       |
+The full wire format and setup are in [Integration setup](INTEGRATIONS.md).
 
-The timeout mode is a simulated outcome, not proof of cancellation of a slow external HTTP request. The current policy retries any unsuccessful controlled receiver response until the cap; a production retry taxonomy would distinguish terminal and transient failures.
+## Recovery, observation, and navigation
 
-## Two kinds of idempotency
+Recovery queries complete dead-delivery history. Bulk replay accepts 1–20 unique `{eventId, expectedCycle}` selections, reports replayed/skipped results, and returns a fresh snapshot. Eligibility is checked inside the write transaction: ownership, dead status, cycle match, no active lease, and standard receiver. Foreign and missing IDs have the same generic skip result. All successful state/audit writes commit together or roll back; pause prevents new claims after replay.
 
-Producer deduplication and receiver effect deduplication solve different problems.
+Recovery Lab persists one current scenario's event and receiver references per workspace. Stages come from delivery, repair, and effect state. Repeated start does not produce another active event; rerunning a completed scenario preserves its earlier event. The guide exclusively manages its receiver settings and replay controls.
 
-At acceptance, the unique key scoped to tenant and endpoint prevents repeated logical submissions from creating additional queue records. Canonical JSON keeps reordered object keys from changing the hash. If a key is reused with a different event type or payload, the server rejects the conflict.
+The worker publishes a heartbeat every two seconds while work is running independently of slow network requests. Snapshots consider observations newer than ten seconds active. A heartbeat establishes recent access to this database, without proving receiver health or a delivery deadline. Browser fallback never sends live network requests.
 
-At the receiver, a unique `(owner, event_id)` constraint prevents another demo effect from being inserted for the same event. This stays effective when a delivered event is replayed with its original identity.
+The generic snapshot keeps the latest 100 deliveries and 30 activities. **Live** and **Lab** scope summaries query their own authoritative totals, chart, and eight recent deliveries across full persisted history. The ten-minute chart groups finished attempt outcomes by UTC minute. Average duration includes measured HTTP/network outcomes and excludes unfinished or unmeasured lease interruptions. Live metrics never count controlled lab receiver effects.
 
-Consider a real receiver that commits an effect and loses its acknowledgement. The sender cannot know whether the effect happened. Retrying can create another network attempt. Receiver idempotency can keep the business effect singular, but it cannot establish exactly-once network delivery. RelayForge currently uses an in-process receiver, so this network ambiguity is a design discussion and future integration-test case.
+Dashboard URLs preserve view, scope, list filters, pagination, and inspected event ID. Live is the default overview; `scope=lab` restores the Lab view. Existing `view=endpoints` links now open Connections. The Studio connection uses `view=studio&endpoint=…`. Safe sign-in return paths and copied event links carry navigation state, not authorization. Palette event searches use the account-owned full-history API, bound results, and cancel stale searches.
 
-An external receiver would need to atomically commit its deduplication record and business change in its own database. A remote HTTP response and a sender database write cannot be treated as one transaction.
+## Storage and operations
 
-## Failure and concurrency
+SQLite uses WAL, foreign keys, a five-second busy timeout, and `BEGIN IMMEDIATE` transactional batches. Committed migration checksums prevent silently changing an already-applied migration. The additive live migration classifies existing endpoints as demo and preserves accounts, events, cycles, and attempts.
 
-| Situation                         | Implemented behavior                                               | Remaining limit                                      |
-| --------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------- |
-| Same key is submitted again       | Return the accepted event and track the duplicate                  | Different payload or type is a conflict              |
-| Two pumps target the same event   | Conditional update permits only one active lease claim             | Real concurrency deserves database integration tests |
-| Processor stops before completion | Later pumping marks the interrupted attempt and recovers the lease | Recovery needs a later worker pass or request pump   |
-| Stale processor tries to finish   | Completion requires its lease token                                | A lease does not stop all repeated receiver calls    |
-| All automatic attempts fail       | Dead state exposes the event for inspection and replay             | Recovery is an operator decision                     |
-| Dashboard is closed               | Stored queue state remains; a running worker can process due work  | Without a worker, progress waits for request pumping |
+Web and worker run separately, need the same writable persistent database and live configuration, and should be restarted together after a migration/configuration update. Back up the database before migration; preserve the protected master key separately. Graceful worker shutdown waits for current claims. Forced termination relies on lease expiry and another worker pass.
 
-Persistence and autonomous execution are separate properties. Leases reduce overlapping work; they do not make network delivery exactly once.
-
-## Security boundaries
-
-- **Ownership:** the authenticated service derives ownership from the server-side session's user ID. Browser-supplied tenant IDs cannot select a workspace.
-- **Authentication:** email/password accounts and opaque sessions are stored by the application. Authentication does not depend on external identity headers.
-- **Mutation checks:** dashboard actions require same-origin requests, `application/json`, and strict action schemas. IDs, event types, modes, and payload structure are bounded.
-- **Resource bounds:** request bodies are capped at 16 KiB, event payloads at 12 KiB, JSON depth at 24, and traversal at 2,000 nodes.
-- **Destination restriction:** sends target built-in receiver IDs. No arbitrary user URL is fetched.
-- **Signing:** HMAC-SHA256 covers `timestamp + "." + raw body`, with a five-minute timestamp window and server-owned signing secrets. Web Crypto verifies the signature.
-- **Data access:** detail reads, replay, receiver changes, and snapshots use ownership checks. An opaque ID is not authorization.
-- **Worker authority:** the local worker has direct database access and can process stored workspaces. Keep its database access and process configuration restricted; browser clients cannot select its ownership context.
-
-Signing secrets are persisted in the demo database and are excluded from API responses. Secret encryption, rotation, and revocation are future work. HMAC does not replace tenant authorization, TLS, or effect deduplication.
-
-## Runtime and observations
-
-React and TypeScript keep the UI and contracts readable. Next.js runs the application on Node.js 24. SQLite provides persistent storage without a separate database service for the demo; Drizzle makes the schema and migration SQL visible. Deployments need a writable persistent database path and HTTPS.
-
-The native SQLite adapter uses write-ahead logging, foreign-key enforcement, a five-second busy timeout, and immediate transactions for batches. Migration tracking records each SQL file's checksum and refuses a changed migration that has already been applied. Changing the database implementation therefore requires an explicit adapter with equivalent transaction and claim behavior.
-
-The dashboard exposes attempts, duration, next retry time, activity, queue pause state, and aggregate delivery counts. Success rate uses current delivered events divided by total events. Average duration includes finished attempts with recorded status codes; it is not external network latency. The chart groups attempt outcomes by UTC minute over the recent ten-minute window. Snapshot reads return the latest 100 deliveries and 30 activity entries. The separate history endpoint can page and filter across all accepted events within the 500-event workspace limit.
-
-This MVP does not claim unlimited scale. [The roadmap](ROADMAP.md) separates the standalone worker from further operational evidence, a Postgres adapter, and external delivery integration.
+The project remains one SQLite deployment with 500 accepted events per workspace. Four live calls are a per-worker bound, not a distributed global limit. There is no production throughput/availability claim, automated retention, distributed quota service, or high-availability database adapter. See [Security](SECURITY.md) and the dated [Validation record](VALIDATION.md) for the implemented boundaries and actual check evidence.

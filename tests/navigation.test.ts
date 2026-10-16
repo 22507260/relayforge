@@ -134,3 +134,28 @@ test("login return destinations preserve canonical app links and reject external
     "/?view=activity&category=security",
   );
 });
+
+test("live and lab scope survive sharing, sign-in return, and cross-view navigation while legacy endpoints links remain valid", () => {
+  assert.equal(navigationForView().scope, "live");
+  const lab = parseNavigation(
+    "?scope=lab&view=studio&endpoint=reference-42&event=event-42",
+  );
+  assert.equal(lab.view, "studio");
+  assert.equal(lab.scope, "lab");
+  assert.equal(lab.endpoint, "reference-42");
+  const shared = serializeNavigation(lab);
+  assert.deepEqual(parseUrl(shared), lab);
+  assert.equal(safeReturnTo(shared), shared);
+  const connections = { ...navigationForView("endpoints"), scope: lab.scope };
+  assert.equal(serializeNavigation(connections), "/?view=endpoints&scope=lab");
+  assert.equal(parseNavigation("?view=endpoints").view, "endpoints");
+  assert.equal(parseNavigation("?scope=live&scope=lab").scope, "live");
+  assert.equal(
+    parseNavigation("?view=studio&endpoint=..%2Fprivate").endpoint,
+    "all",
+  );
+  assert.equal(parseNavigation("?scope=production").scope, "live");
+  assert.ok(
+    !serializeNavigation(navigationForView("studio")).includes("endpoint="),
+  );
+});

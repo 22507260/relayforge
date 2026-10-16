@@ -1,5 +1,23 @@
 # Validation record
 
+## RelayForge 2.0 live integrations — 2026-10-16
+
+The release passed lint, TypeScript, **117 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full dependency audit still reports five high findings in the development lint dependency chain documented in [Security](SECURITY.md). These checks do not establish a production SLA or a throughput benchmark.
+
+Coverage includes encrypted key tampering and wrong-master detection, one-time public secret boundaries, signing rotation and expiry, producer scope/isolation/revocation races, transactional quotas and rollback, immutable idempotent acceptance, migration compatibility, worker-only network delivery, four-call admission, independent heartbeat, fair progress beyond 100 blocked workspaces, lease fencing, and preserved replay cycles. The setup regression verifies protected files and rejects unexpected explicit Windows grants; the cross-platform branch checks restrictive POSIX modes.
+
+Native transport tests cover fresh A/AAAA resolution and cancellation, mixed and changed DNS answers, special and mapped address rejection, pinned TLS connections with the original hostname, certificate rejection, proxy avoidance, redirects, five-second DNS/header deadlines, bounded response headers, and validated Retry-After. Local TLS test fixtures inject their resolver/connector and CA; production has no private-address or TLS-validation bypass flag.
+
+`npm run verify:http` passed all four compiled HTTP scripts against temporary web, worker, and independent reference-receiver processes with separate disposable application/receiver databases and signing configuration. The integration script verifies bearer-only producer access, account isolation, expiry/revocation, quotas, stale connection revisions, pause, lost acknowledgement, four failures, signing rotation, replay, and one receiver-side effect. The runner stops only its owned processes and removes its verified temporary directory; an occupied reference port is rejected.
+
+Before migration 0005 on 2026-10-14, the local database was backed up outside the checkout. The upgrade preserved **15 accounts, two sessions, 45 endpoints, 121 deliveries, 225 attempts, and 391 activity entries**. All old endpoints became enabled demo connections at revision 1; all 225 existing attempts retained their history with null new transport metadata. Migration count increased from five to six; SQLite integrity returned `ok`.
+
+Compiled browser checks used the existing synthetic reviewer workspace. Live initially showed zero events while Lab retained its 38 events; scope survived reload and navigation. Studio rejected invalid JSON, accepted one real reference event, recorded HTTP 200 and measured latency, and returned the same event ID on an idempotent repeat. Replay retained that ID/payload and displayed Initial delivery and Replay 1 separately. An independent receiver database check recorded two receipts in separate cycles and exactly one effect. External success is labelled Acknowledged with an explicit limit on observing remote business effects.
+
+Connections, Studio, Security, and the live overview were checked at 390 × 844 without document-level horizontal overflow. Connection and API-key dialogs opened with a focused close control and inert backgrounds, and Escape closed them without changing credentials. [Live onboarding](live-preview.jpg), [Connections](connections-preview.jpg), [Studio](studio-preview.jpg), [mobile overview](live-mobile-preview.jpg), and [mobile Connections](connections-mobile-preview.jpg) capture the compiled interface. These are targeted interaction checks, not a complete accessibility audit.
+
+The final connection dialog check confirmed that Escape removes the dialog and inert state and restores focus to its New connection opener. Dialogs retain their opener before background inertness can clear browser focus.
+
 ## Command navigation and request diagnostics — 2026-10-14
 
 The command palette and structured request-error release passed lint, TypeScript, all **81 tests**, the production build, and the production dependency audit (zero findings). The suite adds 23 checks for HTTP error isolation and request IDs, safe client decoding and retry metadata, and bounded navigation search.

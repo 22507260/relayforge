@@ -12,6 +12,7 @@ import type {
   ReplayBatchRequest,
   ReplayBatchResponse,
   Snapshot,
+  ScopeSnapshot,
 } from "../contracts.ts";
 import {
   ApiError,
@@ -28,6 +29,12 @@ import {
   WORKER_HEARTBEAT_TTL_MS,
 } from "./domain.ts";
 import type { SqlDatabase, SqlStatement } from "./sql.ts";
+import { LiveTransport } from "./transport.ts";
+import {
+  loadConnectionSigningKeys,
+  signConnectionBody,
+  SigningConfigurationError,
+} from "./signing.ts";
 
 type WorkspaceRow = {
   signing_secret: string;
@@ -42,6 +49,10 @@ type EndpointRow = {
   color: string;
   mode: ReceiverMode;
   purpose: Endpoint["purpose"];
+  transport: Endpoint["transport"];
+  destination_url: string | null;
+  enabled: number;
+  revision: number;
 };
 type DeliveryRow = {
   id: string;
@@ -66,6 +77,10 @@ type DeliveryRow = {
   latest_error: string | null;
   latest_created_at: number;
   latest_finished_at: number | null;
+  transport: Endpoint["transport"];
+  latest_failure_code: string | null;
+  latest_signing_key_ids: string | null;
+  latest_connection_revision: number | null;
 };
 type AttemptRow = {
   id: string;
@@ -77,6 +92,9 @@ type AttemptRow = {
   duration_ms: number;
   created_at: number;
   finished_at: number | null;
+  failure_code: string | null;
+  signing_key_ids: string | null;
+  connection_revision: number | null;
 };
 type ActivityRow = {
   id: string;
@@ -105,10 +123,12 @@ const EVENT_LIMIT = 500;
 const SNAPSHOT_LIMIT = 100;
 const id = () => crypto.randomUUID();
 
-const DELIVERY_SELECT = `SELECT d.*, e.name AS endpoint_name,
+const DELIVERY_SELECT = `SELECT d.*, e.name AS endpoint_name, e.transport AS transport,
   a.id AS latest_attempt_id, a.cycle AS latest_cycle, a.status_code AS latest_status_code,
-  CASE WHEN a.finished_at IS NOT NULL AND a.status_code IS NOT NULL THEN a.duration_ms END AS latest_duration_ms,
-  a.error AS latest_error, a.created_at AS latest_created_at, a.finished_at AS latest_finished_at
+  CASE WHEN a.finished_at IS NOT NULL AND (a.status_code IS NOT NULL OR a.failure_code IS NOT NULL) THEN a.duration_ms END AS latest_duration_ms,
+  a.error AS latest_error, a.created_at AS latest_created_at, a.finished_at AS latest_finished_at,
+  a.failure_code AS latest_failure_code, a.signing_key_ids AS latest_signing_key_ids,
+  a.connection_revision AS latest_connection_revision
   FROM deliveries d JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner
   LEFT JOIN attempts a ON a.rowid = (
     SELECT rowid FROM attempts WHERE owner = d.owner AND event_id = d.id
@@ -121,6 +141,7 @@ function deliveryView(row: DeliveryRow): Delivery {
     eventType: row.event_type,
     endpointId: row.endpoint_id,
     endpointName: row.endpoint_name,
+    transport: row.transport,
     status: row.status,
     attempts: row.attempts,
     currentCycle: row.current_cycle,
@@ -136,6 +157,9 @@ function deliveryView(row: DeliveryRow): Delivery {
           error: row.latest_error,
           createdAt: row.latest_created_at,
           finishedAt: row.latest_finished_at,
+          failureCode: row.latest_failure_code,
+          signingKeyIds: JSON.parse(row.latest_signing_key_ids || "[]"),
+          connectionRevision: row.latest_connection_revision,
         }
       : null,
   };
@@ -151,6 +175,9 @@ function attemptView(row: AttemptRow): Attempt {
     durationMs: row.duration_ms,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
+    failureCode: row.failure_code,
+    signingKeyIds: JSON.parse(row.signing_key_ids || "[]"),
+    connectionRevision: row.connection_revision,
   };
 }
 
@@ -265,7 +292,19 @@ export class RelayService {
     payload: Record<string, unknown> = { message: "Hello from RelayForge" },
     idempotencyKey = id(),
   ): Promise<string> {
+    return (await this.enqueue(endpointId, eventType, payload, idempotencyKey))
+      .eventId;
+  }
+
+  async enqueue(
+    endpointId: string,
+    eventType: string,
+    payload: Record<string, unknown> = { message: "Hello from RelayForge" },
+    idempotencyKey = id(),
+  ): Promise<{ eventId: string; duplicate: boolean }> {
     const endpoint = await this.endpoint(endpointId);
+    if (!endpoint.enabled)
+      throw new ApiError(409, "This connection is disabled.");
     if (endpoint.purpose !== "standard")
       throw new ApiError(
         409,
@@ -277,12 +316,13 @@ export class RelayService {
     const hash = await hashPayload(canonicalJson({ eventType, payload }));
     const eventId = id();
     const now = this.clock();
-    await this.db.batch([
+    const acceptance = await this.db.batch([
       this.stmt(
         `INSERT OR IGNORE INTO deliveries
         (id, owner, endpoint_id, event_type, payload, payload_hash, idempotency_key, status, attempts, created_at, updated_at, next_attempt_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?
-        WHERE (SELECT COUNT(*) FROM deliveries WHERE owner = ?) < ?`,
+        WHERE (SELECT COUNT(*) FROM deliveries WHERE owner = ?) < ?
+        AND EXISTS (SELECT 1 FROM endpoints WHERE owner = ? AND id = ? AND enabled = 1 AND revision = ?)`,
         eventId,
         this.owner,
         endpointId,
@@ -295,6 +335,9 @@ export class RelayService {
         now,
         this.owner,
         EVENT_LIMIT,
+        this.owner,
+        endpointId,
+        endpoint.revision,
       ),
       this.stmt(
         "INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle) SELECT ?, ?, 'accepted', id, ?, ?, current_cycle FROM deliveries WHERE owner = ? AND id = ?",
@@ -305,7 +348,18 @@ export class RelayService {
         this.owner,
         eventId,
       ),
+      this.stmt(
+        "SELECT id FROM endpoints WHERE owner = ? AND id = ? AND enabled = 1 AND revision = ?",
+        this.owner,
+        endpointId,
+        endpoint.revision,
+      ),
     ]);
+    if (acceptance[2].results.length !== 1)
+      throw new ApiError(
+        409,
+        "This connection changed. Refresh it before sending again.",
+      );
     const stored = await this.stmt(
       "SELECT id, payload_hash FROM deliveries WHERE owner = ? AND endpoint_id = ? AND idempotency_key = ?",
       this.owner,
@@ -315,7 +369,7 @@ export class RelayService {
     if (!stored)
       throw new ApiError(
         429,
-        "This demo workspace has reached its 500-event limit.",
+        "This workspace has reached its 500-event limit or its connection changed.",
       );
     if (stored.payload_hash !== hash)
       throw new ApiError(
@@ -335,7 +389,7 @@ export class RelayService {
           now,
         ),
       ]);
-    return stored.id;
+    return { eventId: stored.id, duplicate: stored.id !== eventId };
   }
 
   async action(action: Action): Promise<Snapshot> {
@@ -373,6 +427,11 @@ export class RelayService {
         break;
       case "set-receiver": {
         const endpoint = await this.endpoint(action.endpointId);
+        if (endpoint.transport !== "demo")
+          throw new ApiError(
+            409,
+            "Live connections have observed delivery results, not simulated receiver modes.",
+          );
         if (endpoint.purpose !== "standard")
           throw new ApiError(
             409,
@@ -429,7 +488,7 @@ export class RelayService {
       }
       case "demo": {
         const { results } = await this.stmt(
-          "SELECT id FROM endpoints WHERE owner = ? AND purpose = 'standard' ORDER BY id",
+          "SELECT id FROM endpoints WHERE owner = ? AND purpose = 'standard' AND transport = 'demo' AND enabled = 1 ORDER BY id",
           this.owner,
         ).all<{ id: string }>();
         const batchId = id();
@@ -729,17 +788,28 @@ export class RelayService {
       );
   }
 
-  /** API calls and the standalone worker claim at most 12 due deliveries per owner. */
-  async pump(): Promise<void> {
+  /** Browser fallback is demo-only; a worker explicitly admits bounded live calls. */
+  async pump(
+    options: {
+      allowLive?: boolean;
+      limit?: number;
+      transport?: LiveTransport;
+    } = {},
+  ): Promise<number> {
     const workspace = await this.workspace();
-    if (!workspace || workspace.queue_paused) return;
+    if (!workspace || workspace.queue_paused) return 0;
     const now = this.clock();
+    const allowLive = options.allowLive === true;
+    const limit = Math.max(1, Math.min(12, options.limit ?? 12));
+    const transport = options.transport ?? new LiveTransport();
+    const eligibleTransport = allowLive ? "1 = 1" : "e.transport = 'demo'";
     // An interrupted worker consumes an attempt. Recovery never silently drops it.
     await this.db.batch([
       this.stmt(
         `INSERT INTO activity (id, owner, kind, event_id, message, created_at, cycle)
         SELECT lower(hex(randomblob(16))), owner, CASE WHEN attempts >= ? THEN 'dead' ELSE 'system' END, id,
-        'Expired worker lease recovered', ?, current_cycle FROM deliveries WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL`,
+        'Expired worker lease recovered', ?, current_cycle FROM deliveries WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL
+        AND EXISTS (SELECT 1 FROM endpoints e WHERE e.owner = deliveries.owner AND e.id = deliveries.endpoint_id AND ${eligibleTransport})`,
         MAX_ATTEMPTS,
         now,
         this.owner,
@@ -747,7 +817,8 @@ export class RelayService {
       ),
       this.stmt(
         `UPDATE attempts SET error = 'Worker lease expired before acknowledgment', finished_at = ?
-        WHERE owner = ? AND finished_at IS NULL AND id IN (SELECT lease_token FROM deliveries WHERE owner = ? AND lease_until <= ?)`,
+        WHERE owner = ? AND finished_at IS NULL AND id IN (SELECT lease_token FROM deliveries WHERE owner = ? AND lease_until <= ?
+        AND EXISTS (SELECT 1 FROM endpoints e WHERE e.owner = deliveries.owner AND e.id = deliveries.endpoint_id AND ${eligibleTransport}))`,
         now,
         this.owner,
         this.owner,
@@ -756,7 +827,8 @@ export class RelayService {
       this.stmt(
         `UPDATE deliveries SET status = CASE WHEN attempts >= ? THEN 'dead' ELSE 'retrying' END,
         next_attempt_at = CASE WHEN attempts >= ? THEN NULL ELSE ? END, updated_at = ?, lease_token = NULL, lease_until = NULL
-        WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL`,
+        WHERE owner = ? AND lease_until <= ? AND lease_token IS NOT NULL
+        AND EXISTS (SELECT 1 FROM endpoints e WHERE e.owner = deliveries.owner AND e.id = deliveries.endpoint_id AND ${eligibleTransport})`,
         MAX_ATTEMPTS,
         MAX_ATTEMPTS,
         now,
@@ -766,19 +838,61 @@ export class RelayService {
       ),
     ]);
     const due = await this.stmt(
-      "SELECT id FROM deliveries WHERE owner = ? AND status IN ('pending', 'retrying') AND next_attempt_at <= ? AND attempts < ? AND lease_token IS NULL ORDER BY next_attempt_at, created_at LIMIT 12",
+      `SELECT d.id, d.endpoint_id FROM deliveries d JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner
+       WHERE d.owner = ? AND d.status IN ('pending', 'retrying') AND d.next_attempt_at <= ? AND d.attempts < ?
+       AND d.lease_token IS NULL AND e.enabled = 1 AND ${eligibleTransport} ORDER BY d.next_attempt_at, d.created_at LIMIT 500`,
       this.owner,
       now,
       MAX_ATTEMPTS,
-    ).all<{ id: string }>();
+    ).all<{ id: string; endpoint_id: string }>();
+    let processed = 0;
+    const prepared = new Map<
+      string,
+      {
+        endpoint: EndpointRow;
+        signingKeys: Awaited<ReturnType<typeof loadConnectionSigningKeys>>;
+        available: boolean;
+      }
+    >();
     for (const candidate of due.results) {
+      if (processed >= limit) break;
+      let connection = prepared.get(candidate.endpoint_id);
+      if (!connection) {
+        const endpoint = await this.endpoint(candidate.endpoint_id);
+        let signingKeys: Awaited<ReturnType<typeof loadConnectionSigningKeys>> =
+          [];
+        let available = true;
+        if (endpoint.transport !== "demo") {
+          available =
+            allowLive &&
+            transport.isAvailable(endpoint.transport, endpoint.destination_url);
+          if (available) {
+            try {
+              signingKeys = await loadConnectionSigningKeys(
+                this.db,
+                this.owner,
+                endpoint.id,
+                this.clock(),
+              );
+            } catch (error) {
+              if (error instanceof SigningConfigurationError) available = false;
+              else throw error;
+            }
+          }
+        }
+        connection = { endpoint, signingKeys, available };
+        prepared.set(candidate.endpoint_id, connection);
+      }
+      if (!connection.available) continue;
+      const { endpoint, signingKeys } = connection;
       const token = id();
       const claimAt = this.clock();
       const claimed = await this.db.batch<DeliveryRow>([
         this.stmt(
           `UPDATE deliveries SET lease_token = ?, lease_until = ?, attempts = attempts + 1, updated_at = ?
           WHERE owner = ? AND id = ? AND status IN ('pending', 'retrying') AND attempts < ? AND next_attempt_at <= ? AND lease_token IS NULL
-          AND EXISTS (SELECT 1 FROM workspaces WHERE owner = ? AND queue_paused = 0) RETURNING *`,
+          AND EXISTS (SELECT 1 FROM workspaces WHERE owner = ? AND queue_paused = 0)
+          AND EXISTS (SELECT 1 FROM endpoints WHERE owner = ? AND id = ? AND enabled = 1 AND revision = ?) RETURNING *`,
           token,
           claimAt + LEASE_MS,
           claimAt,
@@ -787,11 +901,16 @@ export class RelayService {
           MAX_ATTEMPTS,
           claimAt,
           this.owner,
+          this.owner,
+          endpoint.id,
+          endpoint.revision,
         ),
         this.stmt(
-          "INSERT INTO attempts (id, owner, event_id, number, created_at, cycle) SELECT ?, owner, id, attempts, ?, current_cycle FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
+          "INSERT INTO attempts (id, owner, event_id, number, created_at, cycle, signing_key_ids, connection_revision) SELECT ?, owner, id, attempts, ?, current_cycle, ?, ? FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?",
           token,
           claimAt,
+          JSON.stringify(signingKeys.map((key) => key.keyId)),
+          endpoint.revision,
           this.owner,
           candidate.id,
           token,
@@ -799,7 +918,7 @@ export class RelayService {
       ]);
       const event = claimed[0].results[0];
       if (!event) continue;
-      const endpoint = await this.endpoint(event.endpoint_id);
+      processed++;
       const start = performance.now();
       const timestamp = this.clock();
       const body = canonicalJson({
@@ -807,39 +926,84 @@ export class RelayService {
         eventType: event.event_type,
         payload: JSON.parse(event.payload),
         attempt: event.attempts,
+        ...(endpoint.transport === "demo"
+          ? {}
+          : { cycle: event.current_cycle, createdAt: event.created_at }),
       });
-      const signature = await signPayload(
-        workspace.signing_secret,
-        timestamp,
-        body,
-      );
-      const response = await this.receive(
-        endpoint.id,
-        body,
-        timestamp,
-        signature,
-      );
+      let statusCode: number | null;
+      let error: string | null;
+      let failureCode: string | null = null;
+      let retryAfterMs: number | null = null;
+      let measuredDuration: number | null = null;
+      if (endpoint.transport === "demo") {
+        const signature = await signPayload(
+          workspace.signing_secret,
+          timestamp,
+          body,
+        );
+        const response = await this.receive(
+          endpoint.id,
+          body,
+          timestamp,
+          signature,
+        );
+        statusCode = response.status;
+        error = response.error;
+      } else {
+        const response = await transport.send({
+          transport: endpoint.transport,
+          destinationUrl: endpoint.destination_url,
+          endpointId: endpoint.id,
+          eventId: event.id,
+          cycle: event.current_cycle,
+          body,
+          timestamp,
+          signatures: signConnectionBody(signingKeys, timestamp, body),
+        });
+        statusCode = response.statusCode;
+        error = response.error;
+        failureCode = response.failureCode;
+        retryAfterMs = response.retryAfterMs;
+        measuredDuration = response.durationMs;
+      }
       const finishedAt = this.clock();
-      const duration = Math.max(1, Math.round(performance.now() - start));
-      const successful = response.status >= 200 && response.status < 300;
-      const status = nextStatus(successful, event.attempts);
+      const duration =
+        measuredDuration ?? Math.max(1, Math.round(performance.now() - start));
+      const successful =
+        statusCode !== null && statusCode >= 200 && statusCode < 300;
+      const retryable =
+        endpoint.transport === "demo" ||
+        statusCode === null ||
+        statusCode === 408 ||
+        statusCode === 429 ||
+        statusCode >= 500;
+      const status = successful
+        ? "delivered"
+        : retryable
+          ? nextStatus(false, event.attempts)
+          : "dead";
       const nextAt =
         status === "retrying"
-          ? finishedAt + retryDelayMs(event.attempts, this.random())
+          ? finishedAt +
+            Math.max(
+              retryDelayMs(event.attempts, this.random()),
+              retryAfterMs ?? 0,
+            )
           : null;
       const message = successful
         ? `${endpoint.name} acknowledged the event`
         : status === "dead"
-          ? `${endpoint.name} exhausted ${MAX_ATTEMPTS} attempts`
-          : `${endpoint.name} returned ${response.status}; retry scheduled`;
+          ? `${endpoint.name} delivery failed${retryable ? ` after ${MAX_ATTEMPTS} attempts` : " with a terminal HTTP response"}`
+          : `${endpoint.name} ${statusCode === null ? "had a network failure" : `returned ${statusCode}`}; retry scheduled`;
       await this.db.batch([
         this.stmt(
-          `UPDATE attempts SET status_code = ?, error = ?, duration_ms = ?, finished_at = ? WHERE owner = ? AND id = ?
+          `UPDATE attempts SET status_code = ?, error = ?, duration_ms = ?, finished_at = ?, failure_code = ? WHERE owner = ? AND id = ?
           AND EXISTS (SELECT 1 FROM deliveries WHERE owner = ? AND id = ? AND lease_token = ?)`,
-          response.status,
-          successful ? null : response.error,
+          statusCode,
+          successful ? null : error,
           duration,
           finishedAt,
+          failureCode,
           this.owner,
           token,
           this.owner,
@@ -867,6 +1031,7 @@ export class RelayService {
         ),
       ]);
     }
+    return processed;
   }
 
   /** Controlled in-process receiver. It shares signing and persistence with the HTTP route. */
@@ -877,6 +1042,8 @@ export class RelayService {
     signature: string,
   ): Promise<{ status: number; error: string | null; duplicate?: boolean }> {
     const endpoint = await this.endpoint(endpointId);
+    if (endpoint.transport !== "demo")
+      return { status: 404, error: "Receiver not found" };
     const workspace = await this.workspace();
     if (
       !workspace ||
@@ -1045,6 +1212,82 @@ export class RelayService {
     };
   }
 
+  private async scopeSnapshot(
+    scope: "live" | "lab",
+    now: number,
+  ): Promise<ScopeSnapshot> {
+    const filter =
+      scope === "lab" ? "e.transport = 'demo'" : "e.transport != 'demo'";
+    const [summary, latency, buckets, duplicates, effects, recent] =
+      await Promise.all([
+        this.stmt(
+          `SELECT COUNT(*) AS total, COALESCE(SUM(d.status = 'delivered'),0) AS delivered,
+        COALESCE(SUM(d.status IN ('pending','retrying')),0) AS queued, COALESCE(SUM(d.status = 'dead'),0) AS dead
+        FROM deliveries d JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner WHERE d.owner = ? AND ${filter}`,
+          this.owner,
+        ).first<{
+          total: number;
+          delivered: number;
+          queued: number;
+          dead: number;
+        }>(),
+        this.stmt(
+          `SELECT AVG(a.duration_ms) AS average FROM attempts a JOIN deliveries d ON d.id = a.event_id AND d.owner = a.owner
+        JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner WHERE a.owner = ? AND ${filter}
+        AND a.finished_at IS NOT NULL AND (a.status_code IS NOT NULL OR a.failure_code IS NOT NULL)`,
+          this.owner,
+        ).first<{ average: number | null }>(),
+        this.stmt(
+          `SELECT CAST(a.created_at / 60000 AS INTEGER) AS minute,
+        SUM(CASE WHEN a.status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS delivered,
+        SUM(CASE WHEN a.status_code BETWEEN 200 AND 299 THEN 0 ELSE 1 END) AS failed
+        FROM attempts a JOIN deliveries d ON d.id = a.event_id AND d.owner = a.owner JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner
+        WHERE a.owner = ? AND ${filter} AND a.created_at >= ? AND a.finished_at IS NOT NULL GROUP BY minute`,
+          this.owner,
+          now - 600_000,
+        ).all<{ minute: number; delivered: number; failed: number }>(),
+        this.stmt(
+          `SELECT COUNT(*) AS total FROM activity a JOIN deliveries d ON d.id = a.event_id AND d.owner = a.owner
+        JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner WHERE a.owner = ? AND a.kind = 'duplicate' AND ${filter}`,
+          this.owner,
+        ).first<{ total: number }>(),
+        this.stmt(
+          `SELECT COUNT(*) AS total FROM receiver_effects r JOIN deliveries d ON d.id = r.event_id AND d.owner = r.owner
+        JOIN endpoints e ON e.id = d.endpoint_id AND e.owner = d.owner WHERE r.owner = ? AND ${filter}`,
+          this.owner,
+        ).first<{ total: number }>(),
+        this.stmt(
+          `${DELIVERY_SELECT} WHERE d.owner = ? AND ${filter} ORDER BY d.created_at DESC, d.rowid DESC LIMIT 8`,
+          this.owner,
+        ).all<DeliveryRow>(),
+      ]);
+    const total = summary?.total ?? 0;
+    const delivered = summary?.delivered ?? 0;
+    return {
+      deliveries: recent.results.map(deliveryView),
+      metrics: {
+        total,
+        delivered,
+        queued: summary?.queued ?? 0,
+        dead: summary?.dead ?? 0,
+        successRate: total ? Math.round((delivered / total) * 1000) / 10 : 0,
+        avgLatency: Math.round(latency?.average ?? 0),
+        duplicatesPrevented: duplicates?.total ?? 0,
+        businessEffects: effects?.total ?? 0,
+      },
+      chart: Array.from({ length: 10 }, (_, index) => {
+        const minute = Math.floor(now / 60_000) - 9 + index;
+        const bucket = buckets.results.find((row) => row.minute === minute);
+        const time = new Date(minute * 60_000);
+        return {
+          label: `${String(time.getUTCHours()).padStart(2, "0")}:${String(time.getUTCMinutes()).padStart(2, "0")}`,
+          delivered: bucket?.delivered ?? 0,
+          failed: bucket?.failed ?? 0,
+        };
+      }),
+    };
+  }
+
   async snapshot(): Promise<Snapshot> {
     const workspace = await this.workspace();
     const now = this.clock();
@@ -1061,7 +1304,7 @@ export class RelayService {
       this.stmt(
         `SELECT e.*, COUNT(d.id) AS deliveries, SUM(CASE WHEN d.status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
         (SELECT a.duration_ms FROM attempts a JOIN deliveries target ON target.id = a.event_id AND target.owner = a.owner
-         WHERE a.owner = e.owner AND target.endpoint_id = e.id AND a.finished_at IS NOT NULL AND a.status_code IS NOT NULL
+         WHERE a.owner = e.owner AND target.endpoint_id = e.id AND a.finished_at IS NOT NULL AND (a.status_code IS NOT NULL OR a.failure_code IS NOT NULL)
          ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1) AS last_duration_ms
         FROM endpoints e LEFT JOIN deliveries d ON d.endpoint_id = e.id AND d.owner = e.owner WHERE e.owner = ? GROUP BY e.id ORDER BY e.id`,
         this.owner,
@@ -1091,7 +1334,7 @@ export class RelayService {
         dead: number;
       }>(),
       this.stmt(
-        "SELECT AVG(duration_ms) AS average FROM attempts WHERE owner = ? AND finished_at IS NOT NULL AND status_code IS NOT NULL",
+        "SELECT AVG(duration_ms) AS average FROM attempts WHERE owner = ? AND finished_at IS NOT NULL AND (status_code IS NOT NULL OR failure_code IS NOT NULL)",
         this.owner,
       ).first<{ average: number | null }>(),
       this.stmt(
@@ -1099,7 +1342,7 @@ export class RelayService {
         this.owner,
       ).first<{ total: number }>(),
       this.stmt(
-        "SELECT CAST(created_at / 60000 AS INTEGER) AS minute, SUM(status_code BETWEEN 200 AND 299) AS delivered, SUM(status_code >= 400) AS failed FROM attempts WHERE owner = ? AND created_at >= ? GROUP BY minute",
+        "SELECT CAST(created_at / 60000 AS INTEGER) AS minute, SUM(CASE WHEN status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS delivered, SUM(CASE WHEN status_code BETWEEN 200 AND 299 THEN 0 ELSE 1 END) AS failed FROM attempts WHERE owner = ? AND created_at >= ? AND finished_at IS NOT NULL GROUP BY minute",
         this.owner,
         this.clock() - 600_000,
       ).all<{ minute: number; delivered: number; failed: number }>(),
@@ -1128,10 +1371,16 @@ export class RelayService {
       endpoints: endpointRows.results.map((row): Endpoint => ({
         id: row.id,
         name: row.name,
-        url: `/api/receiver/${row.id}`,
+        url:
+          row.transport === "demo"
+            ? `/api/receiver/${row.id}`
+            : (row.destination_url ?? ""),
         description: row.description,
         color: row.color,
-        mode: row.mode,
+        mode: row.transport === "demo" ? row.mode : null,
+        transport: row.transport,
+        enabled: !!row.enabled,
+        revision: row.revision,
         purpose: row.purpose,
         deliveries: row.deliveries,
         delivered: row.delivered ?? 0,
@@ -1159,6 +1408,10 @@ export class RelayService {
         businessEffects: effects?.total ?? 0,
       },
       chart,
+      scopes: {
+        live: await this.scopeSnapshot("live", now),
+        lab: await this.scopeSnapshot("lab", now),
+      },
       system: {
         queuePaused: Boolean(workspace?.queue_paused),
         processor: worker?.active_workers ? "worker" : "request-driven",

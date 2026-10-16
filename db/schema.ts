@@ -91,6 +91,11 @@ export const endpoints = sqliteTable(
     color: text("color").notNull(),
     mode: text("mode").notNull(),
     purpose: text("purpose").notNull().default("standard"),
+    transport: text("transport").notNull().default("demo"),
+    destinationUrl: text("destination_url"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    revision: integer("revision").notNull().default(1),
+    signingKeyId: text("signing_key_id"),
   },
   (table) => [index("endpoints_owner_idx").on(table.owner)],
 );
@@ -147,6 +152,9 @@ export const attempts = sqliteTable(
     durationMs: integer("duration_ms").notNull().default(0),
     createdAt: integer("created_at").notNull(),
     finishedAt: integer("finished_at"),
+    failureCode: text("failure_code"),
+    signingKeyIds: text("signing_key_ids"),
+    connectionRevision: integer("connection_revision"),
   },
   (table) => [index("attempts_event_idx").on(table.owner, table.eventId)],
 );
@@ -196,4 +204,61 @@ export const recoveryDemos = sqliteTable("recovery_demos", {
   previousEventId: text("previous_event_id"),
   createdAt: integer("created_at").notNull(),
   repairedAt: integer("repaired_at"),
+});
+
+export const connectionSigningKeys = sqliteTable(
+  "connection_signing_keys",
+  {
+    keyId: text("key_id").primaryKey(),
+    owner: text("owner")
+      .notNull()
+      .references(() => workspaces.owner),
+    endpointId: text("endpoint_id")
+      .notNull()
+      .references(() => endpoints.id),
+    encryptedSecret: text("encrypted_secret").notNull(),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at"),
+  },
+  (table) => [
+    index("connection_signing_keys_endpoint_idx").on(
+      table.owner,
+      table.endpointId,
+    ),
+  ],
+);
+
+export const producerKeys = sqliteTable(
+  "producer_keys",
+  {
+    id: text("id").primaryKey(),
+    owner: text("owner")
+      .notNull()
+      .references(() => workspaces.owner),
+    endpointId: text("endpoint_id")
+      .notNull()
+      .references(() => endpoints.id),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    prefix: text("prefix").notNull(),
+    scope: text("scope").notNull().default("events:write"),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    lastUsedAt: integer("last_used_at"),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("producer_keys_hash_idx").on(table.tokenHash),
+    index("producer_keys_owner_idx").on(table.owner, table.createdAt),
+  ],
+);
+
+export const producerRateLimits = sqliteTable("producer_rate_limits", {
+  key: text("key").primaryKey(),
+  owner: text("owner")
+    .notNull()
+    .references(() => workspaces.owner),
+  windowStart: integer("window_start").notNull(),
+  attempts: integer("attempts").notNull(),
+  lastRequestId: text("last_request_id").notNull(),
 });

@@ -5,6 +5,7 @@ export const views = [
   "deliveries",
   "recovery",
   "endpoints",
+  "studio",
   "activity",
   "engineering",
   "security",
@@ -30,6 +31,7 @@ export const securityKinds = [
 ] as const;
 export interface NavigationState {
   view: NavigationView;
+  scope: "live" | "lab";
   page: number;
   size: number;
   q: string;
@@ -48,6 +50,7 @@ export function navigationForView(
 ): NavigationState {
   return {
     view,
+    scope: "live",
     page: 1,
     size: view === "recovery" ? 10 : 20,
     q: "",
@@ -91,7 +94,9 @@ export function parseNavigation(
     ? (requestedView as NavigationView)
     : "overview";
   const state = navigationForView(view);
+  if (get("scope") === "lab") state.scope = "lab";
   state.event = identifier(get("event"));
+  if (view === "studio") state.endpoint = identifier(get("endpoint")) ?? "all";
   if (["deliveries", "recovery", "activity"].includes(view)) {
     state.page = positive(get("page"), 500, 1);
     const size = positive(
@@ -143,6 +148,9 @@ export function parseNavigation(
 export function serializeNavigation(state: NavigationState): string {
   const params = new URLSearchParams();
   if (state.view !== "overview") params.set("view", state.view);
+  if (state.scope === "lab") params.set("scope", "lab");
+  if (state.view === "studio" && state.endpoint !== "all")
+    params.set("endpoint", state.endpoint);
   if (["deliveries", "recovery", "activity"].includes(state.view)) {
     if (state.page !== 1) params.set("page", String(state.page));
     if (state.size !== (state.view === "recovery" ? 10 : 20))

@@ -1,63 +1,45 @@
 # Roadmap
 
-The current version is a working portfolio MVP: a persistent queue, a standalone worker, a dashboard with request fallback, and controlled receivers. The first milestone describes the worker addition and its verification boundary. Later milestones are proposed work, not completed features or delivery dates.
+RelayForge 2.0 implements live integrations: constrained HTTPS and an independent reference receiver, encrypted connection signing keys with rotation, scoped producer credentials, Integration Studio, and separate Live/Lab metrics. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
 
-## Current limitations
+## Implemented
 
-- Autonomous progress depends on a running worker with access to the same SQLite file as the web application. Without a recent worker heartbeat, the dashboard falls back to pump requests. A heartbeat is an observation of liveness, not a delivery or availability guarantee.
-- The processor invokes a controlled receiver in-process. It does not deliver to external systems or reproduce network acknowledgement loss.
-- Only built-in receiver destinations are supported.
-- The application manages accounts and sessions. Email verification, password recovery, and public-deployment abuse controls remain future work.
-- Signing secrets are stored in the demo database; encryption and rotation are not implemented.
-- Unit tests alone cannot establish production database race behavior or crash recovery.
-- Workspaces accept up to 500 events; overview snapshots expose the latest 100 deliveries and 30 activities. Separate delivery-history and unified audit APIs support full-history pagination and server-side filtering. Retention policies and larger workspace capacity remain future work.
-- Attempts recorded before cycle tracking remain in Legacy history; their original cycle boundaries cannot be reconstructed reliably.
-- There is no published load benchmark, SLA, billing system, or production incident record.
-- No exactly-once network delivery guarantee is made.
+- Durable SQLite acceptance, payload idempotency, owner isolation, lease-fenced claims and completion, and a standalone worker.
+- Worker-only network delivery, four concurrent calls per worker, independent heartbeat updates, and fair bounded workspace scheduling. Browser fallback processes only Lab deliveries.
+- Exact HTTPS hostname allowlists, public-address DNS checks on every attempt, pinned connections, TLS verification, a total deadline, bounded headers, and no redirects.
+- Per-connection encrypted signing keys, a protected external master key, 24-hour rotation grace, and one-time secret disclosure.
+- Endpoint-scoped producer API keys with expiry, revocation, transactional authorization and quotas.
+- Recovery triage, bounded bulk replay, preserved delivery cycles, a persistent Recovery Lab, and independent receiver tests for lost acknowledgements and deduplicated effects.
+- Connections, Integration Studio, account security, full audit navigation, canonical dashboard URLs, command search, and request diagnostics.
 
-The current account controls include active-session inspection, other-session revocation, verified password changes, and a unified security/delivery audit explorer. Dashboard views, filters, pagination, and event drawers have canonical URLs. These implemented controls do not provide email verification, forgotten-password recovery, or a reviewed public-service abuse policy.
+## Current boundaries
 
-## 1. Autonomous processing — implementation and verification
+- Web and workers share one writable SQLite file. Production supervision, representative load measurements, alerts, and restore drills need deployment-specific evidence.
+- HTTPS destinations require an operator-configured exact hostname. Arbitrary URLs, redirects, custom ports, and private destinations are unsupported. The reference transport has one explicit fixed loopback address.
+- The application observes HTTP acknowledgement. Receiver-side idempotency is required for business effects; RelayForge makes no exactly-once network guarantee.
+- Historical Lab signing secrets remain in the application database. Live connection signing keys use encryption and an external master key; backups must preserve that original key separately.
+- Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records and scoped overviews query independent totals and recent events.
+- Legacy attempts keep unknown cycle boundaries. Their original history is preserved without inventing a cycle number.
+- Email verification, forgotten-password recovery, a reviewed public-service abuse policy, billing, and an SLA remain outside this release.
 
-A standalone Node.js worker separates queue progress from the dashboard. It uses the same native SQLite adapter and lease-fenced processor as the API, writes a persisted heartbeat, and waits for an ongoing pump on graceful shutdown. The UI can distinguish recent worker observations from request-driven fallback. The worker still invokes controlled receivers in-process.
+## Next: deployment and recovery evidence
 
-**Verification status — 2026-10-11:** implemented and checked. The full suite passed 29 tests, including six worker runtime checks covering processing without HTTP/browser pumps, pause, heartbeat expiry, competing processes, actual process termination and 15-second lease recovery, graceful abort, final-budget recovery, and idempotent shutdown before database closure. The compiled dashboard showed browser fallback while the worker was offline and worker mode after restart. See the [validation record](VALIDATION.md) for the exact evidence and limits.
+Provide supervised web/worker deployment, documented encrypted-key and database backup/restore procedures, health checks, and alerting. Run recovery drills for process termination, storage failure, wrong or missing key configuration, and sustained receiver outages.
 
-The runtime checks use native SQLite and actual child processes for autonomous execution, competing claims, and forced termination. Graceful lifecycle checks use the loop's abort signal. This demonstrates the local worker boundary; deployment supervision, platform-wide signal behavior, and production operational properties need separate evidence.
+Acceptance requires reproducible procedures and observed outcomes in the actual deployment environment.
 
-Further work includes supervised deployment, alerts, recovery drills, and measured behavior under representative load. Starting a local worker does not establish those operational properties.
+## Next: measured performance and storage evaluation
 
-## 2. Database adapter and Postgres evaluation
+Publish a representative workload, environment, raw results, queue lag, attempt percentiles, duplicate contention, and database cost. Evaluate a Postgres adapter only against a concrete workload; preserve tenant isolation, transactional acceptance, lease fencing, and replay history in the same behavioral suite.
 
-Extract the persistence contract and implement a Postgres adapter. Preserve tenant scoping, atomic claims, unique idempotency constraints, and attempt history. Evaluate whether the deployment workload benefits from the change.
+## Next: lifecycle policies
 
-**Acceptance criteria:** run the same behavioral suite against SQLite and Postgres; document transaction and lease semantics; verify concurrent claims and duplicate inserts; provide versioned migrations and reproducible local setup.
+Define tested retention and deduplication windows, archival, workspace capacity, receiver key retirement, and account recovery. Keep event, attempt, acknowledgement, and business-effect metrics distinct as those policies evolve.
 
-Both implementations must preserve behavior for the adapter boundary to be useful.
-
-## 3. External destinations and secret lifecycle
-
-Design destination registration, constrained egress, encrypted signing secrets, rotation, and revocation. Review SSRF before accepting arbitrary URLs: redirects, private addresses, DNS changes, and outbound policy all affect the boundary. Replace the controlled adapter with bounded real HTTP calls and test ambiguous outcomes.
-
-**Acceptance criteria:** an explicit security model; disallowed destination and redirect tests; bounded request/response sizes; real timeouts; no secret leakage; a documented signature contract; a receiver test that commits an effect but withholds acknowledgement.
-
-## 4. Operational policies
-
-Recovery now provides dead-letter triage, bounded bulk replay with cycle guards, an explicit replay history, and a persistent recovery demonstration. Remaining work includes a retry taxonomy, terminal failure handling, retention, and richer audit navigation. Preserve the current rejection of an idempotency key reused with different payload or type, and define how long deduplication records remain.
-
-**Acceptance criteria:** operator actions are audited; replay history is unambiguous; retention is tested; metrics distinguish events, attempts, acknowledgements, and effects; terminal failures do not consume unnecessary retries.
-
-## 5. Measured performance and deployment evidence
-
-Create a representative workload. Measure queue lag, attempt duration percentiles, duplicate contention, database cost, and recovery under failure. Publish environment, procedure, and raw results before claiming capacity.
-
-**Acceptance criteria:** a reproducible benchmark and baseline; bounded changes evaluated against it; deployed health checks and alerts; a documented restore procedure; reviewed authentication, authorization, secrets, and dependency updates.
-
-## Portfolio completion checklist
+## Portfolio checklist
 
 - A clean checkout installs, migrates, builds, and starts from the README.
-- CI runs type checking, tests, and build without editing migrations.
-- A short demo shows a failure, its recorded cause, and recovery.
-- Architecture documents match the implementation.
-- Deployment links and screenshots correspond to a verified version.
-- The project owner can explain and modify the reliability path without depending on a prepared script.
+- CI runs lint, type checking, tests, a production dependency audit, a build, and isolated compiled HTTP checks.
+- A short demonstration shows acceptance, a recorded failure, repair, and replay of the same event.
+- Screenshots, protocol documentation, and architecture match the verified release.
+- The project owner can explain and modify the reliability and security boundaries.

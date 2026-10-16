@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -13,6 +14,12 @@ const environment = {
   ...process.env,
   NODE_ENV: "production",
   DATABASE_PATH: join(directory, "verification.sqlite"),
+  RELAYFORGE_HTTP_VERIFICATION: "true",
+  RELAYFORGE_MASTER_KEY_FILE: join(directory, "master.key"),
+  RELAYFORGE_REFERENCE_ENABLED: "true",
+  RELAYFORGE_ALLOWED_HOSTS: "hooks.example.com",
+  RELAYFORGE_REFERENCE_KEYS_FILE: join(directory, "reference-keys.json"),
+  RELAYFORGE_REFERENCE_DATABASE: join(directory, "receiver.sqlite"),
 };
 const processes = [];
 let stopping = false;
@@ -46,6 +53,23 @@ async function availablePort() {
   if (!address || typeof address === "string")
     throw new Error("Could not select a loopback verification port.");
   return address.port;
+}
+
+async function assertReferencePortFree() {
+  const probe = createServer();
+  try {
+    await new Promise((resolveReady, reject) => {
+      probe.once("error", reject);
+      probe.listen(4100, "127.0.0.1", resolveReady);
+    });
+  } catch {
+    throw new Error(
+      "Port 4100 is in use. Stop the local reference receiver before isolated HTTP verification.",
+    );
+  }
+  await new Promise((resolveClosed, reject) =>
+    probe.close((error) => (error ? reject(error) : resolveClosed())),
+  );
 }
 
 function hasExited(runtime) {
@@ -101,6 +125,40 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 
 try {
+  await assertReferencePortFree();
+  await writeFile(environment.RELAYFORGE_MASTER_KEY_FILE, randomBytes(32), {
+    mode: 0o600,
+  });
+  await writeFile(
+    environment.RELAYFORGE_REFERENCE_KEYS_FILE,
+    JSON.stringify({ mode: "healthy", connections: [] }),
+    { mode: 0o600 },
+  );
+  const reference = launch("reference", [
+    "--experimental-strip-types",
+    "scripts/reference-receiver.mjs",
+  ]);
+  const receiverDeadline = Date.now() + 10_000;
+  let receiverReady = false;
+  while (Date.now() < receiverDeadline && !hasExited(reference)) {
+    try {
+      const response = await fetch("http://127.0.0.1:4100/webhooks", {
+        signal: AbortSignal.timeout(500),
+      });
+      await response.body?.cancel();
+      if (response.status === 404) {
+        receiverReady = true;
+        break;
+      }
+    } catch {
+      /* The independent listener can take a moment to start. */
+    }
+    await wait(100);
+  }
+  if (!receiverReady || hasExited(reference))
+    throw new Error(
+      "The isolated reference receiver could not start on port 4100.",
+    );
   const port = await availablePort();
   const url = `http://127.0.0.1:${port}`;
   const web = launch("web", [
@@ -116,8 +174,13 @@ try {
     "--experimental-strip-types",
     "scripts/worker.mjs",
   ]);
-  for (const script of ["smoke", "security-smoke", "request-smoke"]) {
-    if (stopping || hasExited(web) || hasExited(worker))
+  for (const script of [
+    "smoke",
+    "security-smoke",
+    "request-smoke",
+    "integration-smoke",
+  ]) {
+    if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
       throw new Error("A verification runtime stopped before checks finished.");
     const check = launch(script, [`scripts/${script}.mjs`, url]);
     const timeout = new AbortController();
@@ -137,7 +200,7 @@ try {
     if (result.error || result.code !== 0)
       throw new Error(`${script} did not pass.`);
   }
-  if (stopping || hasExited(web) || hasExited(worker))
+  if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
     throw new Error("A verification runtime exited unexpectedly.");
   console.log(
     "All compiled HTTP checks passed using an isolated temporary database.",

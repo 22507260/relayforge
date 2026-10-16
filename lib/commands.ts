@@ -1,4 +1,9 @@
-import type { Delivery, DeliveryStatus, Endpoint } from "./contracts.ts";
+import type {
+  ConnectionTransport,
+  Delivery,
+  DeliveryStatus,
+  Endpoint,
+} from "./contracts.ts";
 import {
   navigationForView,
   type NavigationState,
@@ -12,6 +17,7 @@ export interface CommandEntry {
   detail: string;
   destination: NavigationState;
   status?: DeliveryStatus;
+  transport?: ConnectionTransport;
 }
 
 const viewCommands: {
@@ -40,9 +46,15 @@ const viewCommands: {
   },
   {
     view: "endpoints",
-    label: "Endpoints",
-    detail: "Controlled receivers and their behavior",
-    keywords: "destinations receivers integrations",
+    label: "Connections",
+    detail: "Live destinations, signing keys, and lab receivers",
+    keywords: "endpoints destinations receivers integrations https reference",
+  },
+  {
+    view: "studio",
+    label: "Integration Studio",
+    detail: "Compose an event and follow its complete delivery journey",
+    keywords: "send producer curl api json payload test integration",
   },
   {
     view: "activity",
@@ -155,6 +167,7 @@ export function deliveryCommands(
       label: delivery.eventType,
       detail: `${delivery.endpointName} · ${delivery.id}`,
       status: delivery.status,
+      transport: delivery.transport,
       destination: {
         ...navigationForView("deliveries"),
         event: delivery.id,

@@ -130,18 +130,22 @@ export async function api<T>(
   url: string,
   body?: unknown,
   signal?: AbortSignal,
+  method?: "POST" | "PATCH" | "DELETE",
 ): Promise<T> {
   let response: Response;
   try {
     response = await fetch(
       url,
-      body === undefined
+      body === undefined && !method
         ? { cache: "no-store", credentials: "same-origin", signal }
         : {
-            method: "POST",
+            method: method ?? "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            headers:
+              body === undefined
+                ? undefined
+                : { "Content-Type": "application/json" },
+            body: body === undefined ? undefined : JSON.stringify(body),
             signal,
           },
     );

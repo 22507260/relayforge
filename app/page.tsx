@@ -6,7 +6,6 @@ import {
   Activity as ActivityIcon,
   ArrowRight,
   Check,
-  CheckCheck,
   ChevronDown,
   CircleHelp,
   Clock3,
@@ -37,15 +36,12 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
 import type {
   Action,
   DeliveryDetail,
   DeliveryPage,
-  Endpoint,
-  ReceiverMode,
   ReplayBatchRequest,
   ReplayBatchResponse,
   Snapshot,
@@ -57,7 +53,6 @@ import type {
 import {
   Button,
   CloseButton,
-  DeliveryChart,
   DeliveryTable,
   Dialog,
   EmptyState,
@@ -71,12 +66,18 @@ import {
   PanelHeading,
   relativeTime,
   StatusBadge,
-  ViewAll,
 } from "./components/relay-ui";
 import { RecoveryPanel } from "./components/recovery-panel";
 import { SecurityCenter } from "./components/security-center";
 import { AuditExplorer } from "./components/audit-explorer";
 import { CommandPalette } from "./components/command-palette";
+import {
+  ConnectionsPanel,
+  TransportBadge,
+} from "./components/connections-panel";
+import { IntegrationStudio } from "./components/integration-studio";
+import { ProducerKeyPanel } from "./components/producer-key-panel";
+import { ProductOverview } from "./components/product-overview";
 import { api, isSessionError } from "@/lib/client-api";
 import {
   navigationForView,
@@ -91,31 +92,26 @@ type View =
   | "Deliveries"
   | "Recovery"
   | "Endpoints"
+  | "Studio"
   | "Activity"
   | "Engineering"
   | "Security";
 type Notice = { id: number; message: string; error?: boolean };
 const navigation = [
-  { name: "Overview", icon: LayoutDashboard },
-  { name: "Deliveries", icon: Layers3 },
-  { name: "Recovery", icon: Wrench },
-  { name: "Endpoints", icon: Webhook },
-  { name: "Activity", icon: ActivityIcon },
-  { name: "Security", icon: ShieldCheck },
-  { name: "Engineering", icon: Code2 },
+  {
+    name: "Overview",
+    label: "Overview",
+    icon: LayoutDashboard,
+    group: "Operate",
+  },
+  { name: "Deliveries", label: "Deliveries", icon: Layers3, group: "Operate" },
+  { name: "Recovery", label: "Recovery", icon: Wrench, group: "Operate" },
+  { name: "Endpoints", label: "Connections", icon: Webhook, group: "Build" },
+  { name: "Studio", label: "Integration Studio", icon: Send, group: "Build" },
+  { name: "Engineering", label: "Engineering", icon: Code2, group: "Build" },
+  { name: "Activity", label: "Activity", icon: ActivityIcon, group: "Manage" },
+  { name: "Security", label: "Security", icon: ShieldCheck, group: "Manage" },
 ] as const;
-const receiverModes: ReceiverMode[] = [
-  "healthy",
-  "flaky",
-  "failing",
-  "timeout",
-];
-const modeDescriptions: Record<ReceiverMode, string> = {
-  healthy: "Acknowledges signed events with HTTP 200.",
-  flaky: "Returns HTTP 503 on the first two attempts, then recovers.",
-  failing: "Returns HTTP 500 until you change its behavior.",
-  timeout: "Exceeds the sandbox deadline and returns HTTP 504.",
-};
 const capitalize = (value: string) =>
   value.charAt(0).toUpperCase() + value.slice(1);
 const loadRecoveryPage = (query: string, signal: AbortSignal) =>
@@ -137,15 +133,6 @@ const loadCommandResults = (search: string, signal: AbortSignal) =>
     signal,
   );
 
-function ModeBadge({ mode }: { mode: ReceiverMode }) {
-  return (
-    <span className={`mode-badge mode-${mode}`}>
-      <i />
-      {capitalize(mode)}
-    </span>
-  );
-}
-
 function processorStatus(system: Snapshot["system"]) {
   const online = system.processor === "worker";
   const lastHeartbeatAt = system.worker?.lastHeartbeatAt ?? null;
@@ -155,7 +142,7 @@ function processorStatus(system: Snapshot["system"]) {
       : `Heartbeat ${relativeTime(lastHeartbeatAt, system.now).toLowerCase()}`;
   const description = online
     ? `${heartbeat}. Background delivery runs independently of this page.`
-    : `${lastHeartbeatAt === null ? "No fresh worker heartbeat is available." : "The last worker heartbeat is stale."} The visible page requests delivery processing every 3 seconds.`;
+    : `${lastHeartbeatAt === null ? "No fresh worker heartbeat is available." : "The last worker heartbeat is stale."} Live events wait in the queue. The visible page can process lab events every 3 seconds.`;
   return { online, lastHeartbeatAt, heartbeat, description };
 }
 
@@ -179,183 +166,6 @@ function PageHeader({
       </div>
       {children && <div className="page-actions">{children}</div>}
     </div>
-  );
-}
-
-function EventForm({
-  endpoints,
-  initialEndpointId,
-  onClose,
-  send,
-  busy,
-}: {
-  endpoints: Endpoint[];
-  initialEndpointId: string | null;
-  onClose: () => void;
-  send: (action: Action) => Promise<boolean>;
-  busy: boolean;
-}) {
-  const [endpointId, setEndpointId] = useState(
-    initialEndpointId ||
-      endpoints.find((endpoint) => endpoint.mode === "healthy")?.id ||
-      endpoints[0]?.id ||
-      "",
-  );
-  const [eventType, setEventType] = useState("invoice.paid");
-  const [payload, setPayload] = useState(
-    '{\n  "customerId": "cus_1042",\n  "amount": 14900,\n  "currency": "USD"\n}',
-  );
-  const [idempotencyKey, setIdempotencyKey] = useState("");
-  const [error, setError] = useState("");
-  const endpoint = endpoints.find((item) => item.id === endpointId);
-  const payloadBytes = new TextEncoder().encode(payload).byteLength;
-  let validJson = false;
-  try {
-    const value: unknown = JSON.parse(payload);
-    validJson = Boolean(
-      value && typeof value === "object" && !Array.isArray(value),
-    );
-  } catch {
-    /* The form reports a parse error on submission. */
-  }
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError("");
-    try {
-      const value: unknown = JSON.parse(payload);
-      if (!value || typeof value !== "object" || Array.isArray(value))
-        throw new Error("The payload must be a valid JSON object.");
-      if (!/^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/.test(eventType))
-        throw new Error(
-          "Start with a letter and use up to 64 letters, numbers, dots, underscores or hyphens.",
-        );
-      if (new TextEncoder().encode(JSON.stringify(value)).byteLength > 12_288)
-        throw new Error("The payload must be smaller than 12 KB.");
-      if (!endpointId) throw new Error("Choose a destination for this event.");
-      const accepted = await send({
-        type: "send",
-        endpointId,
-        eventType,
-        payload: value as Record<string, unknown>,
-        ...(idempotencyKey.trim()
-          ? { idempotencyKey: idempotencyKey.trim() }
-          : {}),
-      });
-      if (accepted) onClose();
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Check the event fields and try again.",
-      );
-    }
-  };
-  return (
-    <Dialog title="Send a new event" onClose={onClose}>
-      <form onSubmit={submit}>
-        <div className="modal-head">
-          <div>
-            <span className="modal-icon">
-              <Zap size={20} />
-            </span>
-            <div>
-              <h2>Send a new event</h2>
-              <p>Dispatch a signed event to a sandbox receiver.</p>
-            </div>
-          </div>
-          <CloseButton onClick={onClose} label="Close event form" />
-        </div>
-        <div className="modal-body">
-          <label className="field">
-            <span className="field-label">Event type</span>
-            <input
-              value={eventType}
-              onChange={(event) => setEventType(event.target.value)}
-              placeholder="invoice.paid"
-              required
-              maxLength={64}
-              autoComplete="off"
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">Destination</span>
-            <span className="select-wrap">
-              <select
-                value={endpointId}
-                onChange={(event) => setEndpointId(event.target.value)}
-              >
-                {endpoints.map((item) => (
-                  <option value={item.id} key={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={16} />
-            </span>
-          </label>
-          <label className="field">
-            <span className="field-label">JSON payload</span>
-            <textarea
-              value={payload}
-              onChange={(event) => setPayload(event.target.value)}
-              required
-              spellCheck={false}
-              rows={7}
-            />
-            <span className={`field-hint ${validJson ? "valid" : ""}`}>
-              <Code2 size={14} />
-              {validJson ? "Valid JSON object" : "Enter a JSON object"} ·{" "}
-              {formatNumber(payloadBytes)} bytes · 12 KB limit
-            </span>
-          </label>
-          <label className="field">
-            <span className="field-label">
-              Idempotency key <small>Optional</small>
-            </span>
-            <input
-              value={idempotencyKey}
-              onChange={(event) => setIdempotencyKey(event.target.value)}
-              placeholder="e.g. invoice-1042-paid"
-              maxLength={128}
-              autoComplete="off"
-            />
-            <span className="field-hint">
-              Reuse the same key and payload to prevent a duplicate event.
-            </span>
-          </label>
-          {endpoint && (
-            <div className="destination-preview">
-              <span className={`endpoint-dot ${endpoint.mode}`}>
-                <Webhook size={17} />
-              </span>
-              <div>
-                <strong>{endpoint.name}</strong>
-                <code>{endpoint.url}</code>
-              </div>
-              <ModeBadge mode={endpoint.mode} />
-            </div>
-          )}
-          {error && (
-            <p className="inline-error" role="alert">
-              {error}
-            </p>
-          )}
-        </div>
-        <div className="modal-foot">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? (
-              <LoaderCircle size={16} className="spin" />
-            ) : (
-              <Send size={16} />
-            )}
-            {busy ? "Sending…" : "Send event"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
   );
 }
 
@@ -438,11 +248,11 @@ function DeliveryDrawer({
     last
       ? {
           statusCode: last.statusCode,
-          durationMs:
-            last.finishedAt == null || last.statusCode == null
-              ? null
-              : last.durationMs,
+          durationMs: last.finishedAt == null ? null : last.durationMs,
           error: last.error,
+          failureCode: last.failureCode,
+          signingKeyIds: last.signingKeyIds,
+          connectionRevision: last.connectionRevision,
           startedAt: new Date(last.createdAt).toISOString(),
           finishedAt: last.finishedAt
             ? new Date(last.finishedAt).toISOString()
@@ -495,7 +305,8 @@ function DeliveryDrawer({
             </div>
           )}
           <div className="drawer-status">
-            <StatusBadge status={event.status} />
+            <StatusBadge status={event.status} transport={event.transport} />
+            <TransportBadge endpoint={event} />
             <time title={fullDate(event.createdAt)}>
               Created {relativeTime(event.createdAt, version)}
             </time>
@@ -530,14 +341,15 @@ function DeliveryDrawer({
               onClick={() => viewEndpoint(event.endpointId)}
             >
               <Webhook size={16} />
-              View endpoint
+              View connection
             </Button>
           </div>
           {event.status === "delivered" && (
             <p className="drawer-replay-note">
               <ShieldCheck size={14} />
-              Replaying preserves the event ID. Receiver effects remain
-              deduplicated.
+              {event.transport === "demo"
+                ? "Replaying preserves the event ID. Lab receiver effects remain deduplicated."
+                : "The receiver acknowledged this event. Replaying preserves its ID; remote business effects depend on your receiver’s idempotency handling."}
             </p>
           )}
           <section className="drawer-section">
@@ -559,7 +371,7 @@ function DeliveryDrawer({
                 </small>
               </div>
               <div>
-                <span>Last HTTP status</span>
+                <span>Last result</span>
                 <strong
                   className={
                     last?.statusCode && last.statusCode >= 400
@@ -570,18 +382,55 @@ function DeliveryDrawer({
                   {last?.statusCode ||
                     (last?.finishedAt == null && last
                       ? "In progress"
-                      : "Not recorded")}
+                      : last?.failureCode
+                        ? "Network failure"
+                        : "Not recorded")}
                 </strong>
               </div>
               <div>
                 <span>Last duration</span>
                 <strong>
-                  {last?.finishedAt == null || last.statusCode == null
+                  {last?.finishedAt == null
                     ? "—"
                     : formatDuration(last.durationMs)}
                 </strong>
               </div>
             </div>
+            {event.transport !== "demo" && (
+              <div className="rf-config-note">
+                <ShieldCheck size={17} />
+                <div>
+                  <strong>
+                    {event.status === "delivered"
+                      ? "Acknowledged by the receiver"
+                      : "Signed HTTP delivery"}
+                  </strong>
+                  {event.status === "delivered"
+                    ? "HTTP success confirms acknowledgement. RelayForge cannot verify a remote application’s business effect."
+                    : "A real HTTP response or network failure is recorded for every completed attempt."}
+                  {last?.failureCode && (
+                    <>
+                      <br />
+                      Failure category: <code>{last.failureCode}</code>
+                    </>
+                  )}
+                  {Boolean(last?.signingKeyIds.length) && (
+                    <>
+                      <br />
+                      Signing key IDs:{" "}
+                      <code>{last?.signingKeyIds.join(", ")}</code>
+                    </>
+                  )}
+                  {last?.connectionRevision !== null &&
+                    last?.connectionRevision !== undefined && (
+                      <>
+                        <br />
+                        Connection revision: {last.connectionRevision}
+                      </>
+                    )}
+                </div>
+              </div>
+            )}
             {event.nextAttemptAt && (
               <p className="next-attempt">
                 <Clock3 size={14} />
@@ -692,7 +541,9 @@ function DeliveryDrawer({
                                         ? "Receiver deadline exceeded"
                                         : attempt.statusCode
                                           ? "Receiver returned an error"
-                                          : "Delivery interrupted"}
+                                          : attempt.failureCode
+                                            ? "Network delivery failed"
+                                            : "Delivery interrupted"}
                                 </small>
                               </span>
                               <span className="timeline-meta">
@@ -706,7 +557,11 @@ function DeliveryDrawer({
                                   }
                                 >
                                   {attempt.statusCode ||
-                                    (inProgress ? "WORKING" : "INTERRUPTED")}
+                                    (inProgress
+                                      ? "WORKING"
+                                      : attempt.failureCode
+                                        ? "NETWORK"
+                                        : "INTERRUPTED")}
                                 </b>
                                 <time title={fullDate(attempt.createdAt)}>
                                   {formatTime(attempt.createdAt)}
@@ -725,16 +580,34 @@ function DeliveryDrawer({
                                   {attempt.error ||
                                     (inProgress
                                       ? "The processor has claimed this event. The response has not been recorded yet."
-                                      : "Signature verified. The receiver acknowledged the event.")}
+                                      : "The receiver acknowledged the signed request.")}
                                 </p>
                                 <span>
                                   Duration:{" "}
                                   {inProgress
                                     ? "In progress"
-                                    : attempt.statusCode == null
-                                      ? "—"
-                                      : formatDuration(attempt.durationMs)}
+                                    : formatDuration(attempt.durationMs)}
                                 </span>
+                                {attempt.failureCode && (
+                                  <span>
+                                    Failure category:{" "}
+                                    <code>{attempt.failureCode}</code>
+                                  </span>
+                                )}
+                                {attempt.signingKeyIds.length > 0 && (
+                                  <span>
+                                    Signing key IDs:{" "}
+                                    <code>
+                                      {attempt.signingKeyIds.join(", ")}
+                                    </code>
+                                  </span>
+                                )}
+                                {attempt.connectionRevision !== null && (
+                                  <span>
+                                    Connection revision:{" "}
+                                    {attempt.connectionRevision}
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
@@ -748,409 +621,6 @@ function DeliveryDrawer({
         </>
       )}
     </Dialog>
-  );
-}
-
-function Overview({
-  snapshot,
-  demo,
-  busy,
-  go,
-  select,
-  hrefForEvent,
-}: {
-  hrefForEvent: (id: string) => string;
-  snapshot: Snapshot;
-  demo: () => void;
-  busy: boolean;
-  go: (view: View) => void;
-  select: (id: string) => void;
-}) {
-  const metrics = snapshot.metrics;
-  const processor = processorStatus(snapshot.system);
-  const healthy = snapshot.endpoints.filter(
-    (endpoint) => endpoint.mode === "healthy",
-  ).length;
-  const unhealthy = snapshot.endpoints.length - healthy;
-  const latest = snapshot.deliveries.slice(0, 5);
-  const chartAcknowledged = snapshot.chart.reduce(
-    (sum, bucket) => sum + bucket.delivered,
-    0,
-  );
-  const chartFailed = snapshot.chart.reduce(
-    (sum, bucket) => sum + bucket.failed,
-    0,
-  );
-  const date = new Date(snapshot.system.now)
-    .toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-    })
-    .toUpperCase();
-  return (
-    <>
-      <PageHeader
-        eyebrow={date}
-        title="Your pipeline, at a glance."
-        description="Real events. Every attempt recorded. A safe place to test reliability."
-      >
-        <Button variant="secondary" onClick={demo} disabled={busy}>
-          {busy ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <Play size={16} />
-          )}
-          Run live demo
-        </Button>
-      </PageHeader>
-      <div className="metric-grid">
-        {[
-          {
-            title: "Accepted events",
-            value: formatNumber(metrics.total),
-            tag: "Durable",
-            tone: "green",
-            icon: Zap,
-            foot: "Persisted before acknowledgement",
-          },
-          {
-            title: "Delivery success",
-            value: `${metrics.successRate.toFixed(1)}%`,
-            tag: `${formatNumber(metrics.delivered)} delivered`,
-            tone: "green",
-            icon: CheckCheck,
-            foot: "Across all accepted events",
-          },
-          {
-            title: "Queued events",
-            value: formatNumber(metrics.queued),
-            tag: snapshot.system.queuePaused
-              ? "Paused"
-              : processor.online
-                ? "Background processing"
-                : "Browser fallback",
-            tone: "blue",
-            icon: Clock3,
-            foot: "Pending and retrying deliveries",
-          },
-          {
-            title: "Failed events",
-            value: formatNumber(metrics.dead),
-            tag: metrics.dead ? "Replay available" : "No dead letters",
-            tone: metrics.dead ? "red" : "neutral",
-            icon: ActivityIcon,
-            foot: "Events that exhausted their attempts",
-          },
-        ].map(({ title, value, tag, tone, icon: Icon, foot }) => (
-          <article className="metric" key={title}>
-            <div className={`metric-icon ${tone}`}>
-              <Icon size={19} />
-            </div>
-            <div className="metric-top">
-              <span>{title}</span>
-            </div>
-            <strong>{value}</strong>
-            <div className="metric-bottom">
-              <span className={`metric-tag ${tone}`}>{tag}</span>
-              <p>{foot}</p>
-            </div>
-          </article>
-        ))}
-      </div>
-      <div className="overview-middle">
-        <section className="panel chart-panel">
-          <PanelHeading
-            title="Delivery attempts"
-            description="Acknowledged and failed attempts over the last 10 minutes"
-          >
-            <span className="time-range">
-              <Clock3 size={14} />
-              Last 10 min
-            </span>
-          </PanelHeading>
-          <div className="chart-legend">
-            <span>
-              <i className="legend-success" />
-              Acknowledged
-            </span>
-            <span>
-              <i className="legend-failed" />
-              Failed attempts
-            </span>
-            <b>
-              {formatNumber(chartAcknowledged + chartFailed)}
-              <small>
-                {" "}
-                total{" "}
-                {chartAcknowledged + chartFailed === 1 ? "attempt" : "attempts"}
-              </small>
-            </b>
-          </div>
-          <DeliveryChart data={snapshot.chart} />
-          <div className="chart-foot">
-            <span>
-              <Radio size={13} />
-              {snapshot.system.queuePaused
-                ? "Queue paused"
-                : processor.online
-                  ? "Background worker · live snapshots"
-                  : "Browser fallback · every 3 seconds"}
-            </span>
-            <span>UTC</span>
-          </div>
-        </section>
-        <section className="panel health-panel">
-          <PanelHeading
-            title="Endpoint health"
-            description="Current sandbox receiver behavior"
-          >
-            <ViewAll onClick={() => go("Endpoints")} />
-          </PanelHeading>
-          <div className="health-score">
-            <div
-              className="health-ring"
-              style={{
-                background: `conic-gradient(var(--lime) ${snapshot.endpoints.length ? (healthy / snapshot.endpoints.length) * 100 : 0}%, var(--border) 0)`,
-              }}
-            >
-              <span>
-                {healthy}
-                <small>/ {snapshot.endpoints.length}</small>
-              </span>
-            </div>
-            <div>
-              <strong>
-                {unhealthy
-                  ? "Failure scenarios enabled"
-                  : "Receivers are ready"}
-              </strong>
-              <p>
-                {unhealthy
-                  ? `${unhealthy} receiver${unhealthy === 1 ? "" : "s"} configured to return errors`
-                  : "All receivers acknowledge signed events"}
-              </p>
-            </div>
-          </div>
-          <div className="health-endpoints">
-            {snapshot.endpoints.map((endpoint) => (
-              <button
-                className="endpoint-row"
-                key={endpoint.id}
-                onClick={() => go("Endpoints")}
-              >
-                <span className={`endpoint-dot ${endpoint.mode}`}>
-                  <Webhook size={16} />
-                </span>
-                <span>
-                  <strong>{endpoint.name}</strong>
-                  <small>
-                    {endpoint.delivered} of {endpoint.deliveries} events
-                    delivered
-                  </small>
-                </span>
-                <ModeBadge mode={endpoint.mode} />
-              </button>
-            ))}
-          </div>
-        </section>
-      </div>
-      <section className="panel table-panel">
-        <PanelHeading
-          title="Recent deliveries"
-          description="Follow an event from acceptance to acknowledgement"
-        >
-          <ViewAll onClick={() => go("Deliveries")} />
-        </PanelHeading>
-        <DeliveryTable
-          rows={latest}
-          onSelect={select}
-          hrefForEvent={hrefForEvent}
-          now={snapshot.system.now}
-          maxAttempts={snapshot.system.maxAttempts}
-          emptyAction={
-            <Button variant="secondary" disabled={busy} onClick={demo}>
-              <Play size={15} />
-              Run your first demo
-            </Button>
-          }
-        />
-        <div className="table-foot">
-          <span>
-            Showing {latest.length} of {formatNumber(metrics.total)} accepted
-            events
-          </span>
-          <span>
-            <i className="live-dot" />
-            {snapshot.system.queuePaused
-              ? "Engine paused"
-              : processor.online
-                ? "Background worker online"
-                : "Browser-driven fallback"}
-          </span>
-        </div>
-      </section>
-      <div className="integrity-strip">
-        <span>
-          <ShieldCheck size={16} />
-          <strong>{formatNumber(metrics.duplicatesPrevented)}</strong>{" "}
-          duplicates prevented
-        </span>
-        <span>
-          <Database size={15} />
-          <strong>{formatNumber(metrics.businessEffects)}</strong> unique
-          receiver effects
-        </span>
-        <button onClick={() => go("Engineering")}>
-          How reliability works
-          <ArrowRight size={14} />
-        </button>
-      </div>
-    </>
-  );
-}
-
-function Endpoints({
-  snapshot,
-  busy,
-  setMode,
-  viewDeliveries,
-  newEvent,
-  openRecovery,
-}: {
-  snapshot: Snapshot;
-  busy: boolean;
-  setMode: (endpointId: string, mode: ReceiverMode) => void;
-  viewDeliveries: (id: string) => void;
-  newEvent: (id: string) => void;
-  openRecovery: () => void;
-}) {
-  const healthy = snapshot.endpoints.filter(
-    (endpoint) => endpoint.mode === "healthy",
-  ).length;
-  return (
-    <>
-      <PageHeader
-        eyebrow="DESTINATIONS"
-        title="Endpoints"
-        description="Change a receiver’s behavior and follow the delivery engine’s response."
-      />
-      <div className="endpoint-summary">
-        <span>
-          <i className="healthy" />
-          {healthy} healthy
-        </span>
-        <span>
-          <i className="degraded" />
-          {snapshot.endpoints.length - healthy} failure{" "}
-          {snapshot.endpoints.length - healthy === 1 ? "scenario" : "scenarios"}
-        </span>
-        <p>
-          {snapshot.endpoints.length} controlled receivers · signed delivery
-        </p>
-      </div>
-      <div className="endpoint-grid">
-        {snapshot.endpoints.map((endpoint) => {
-          return (
-            <article className="endpoint-card" key={endpoint.id}>
-              <div className="endpoint-card-head">
-                <span className={`endpoint-large-icon ${endpoint.mode}`}>
-                  <Webhook size={21} />
-                </span>
-                <div>
-                  <h2>{endpoint.name}</h2>
-                  <code title={endpoint.url}>{endpoint.url}</code>
-                </div>
-                <ModeBadge mode={endpoint.mode} />
-              </div>
-              <div className="behavior-control">
-                <span className="control-label">Receiver behavior</span>
-                {endpoint.purpose === "recovery" ? (
-                  <div className="managed-receiver-note">
-                    <Wrench size={17} />
-                    <span>Managed by the recovery guide</span>
-                  </div>
-                ) : (
-                  <div>
-                    {receiverModes.map((mode) => (
-                      <button
-                        key={mode}
-                        className={
-                          endpoint.mode === mode
-                            ? `active behavior-${mode}`
-                            : ""
-                        }
-                        aria-pressed={endpoint.mode === mode}
-                        disabled={busy}
-                        onClick={() => setMode(endpoint.id, mode)}
-                      >
-                        {capitalize(mode)}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <p>{modeDescriptions[endpoint.mode]}</p>
-              </div>
-              <div className="endpoint-stats">
-                <div>
-                  <span>Delivery success</span>
-                  <strong>
-                    {endpoint.deliveries
-                      ? `${((endpoint.delivered / endpoint.deliveries) * 100).toFixed(1)}%`
-                      : "—"}
-                  </strong>
-                </div>
-                <div>
-                  <span>Accepted events</span>
-                  <strong>{formatNumber(endpoint.deliveries)}</strong>
-                </div>
-                <div>
-                  <span>Last duration</span>
-                  <strong>{formatDuration(endpoint.lastDurationMs)}</strong>
-                </div>
-              </div>
-              <div className="endpoint-card-foot">
-                <button
-                  className="text-button"
-                  onClick={() => viewDeliveries(endpoint.id)}
-                >
-                  View deliveries
-                  <ArrowRight size={14} />
-                </button>
-                <button
-                  className="text-button"
-                  onClick={() =>
-                    endpoint.purpose === "recovery"
-                      ? openRecovery()
-                      : newEvent(endpoint.id)
-                  }
-                >
-                  {endpoint.purpose === "recovery" ? (
-                    <Wrench size={14} />
-                  ) : (
-                    <Send size={14} />
-                  )}
-                  {endpoint.purpose === "recovery"
-                    ? "Open recovery guide"
-                    : "Send test"}
-                </button>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-      <div className="sandbox-note">
-        <ShieldCheck size={20} />
-        <div>
-          <strong>Built-in receivers. Real reliability logic.</strong>
-          <p>
-            These endpoints use a controlled in-process adapter. Delivery,
-            signature verification, retry state, and receiver deduplication are
-            real and persisted.
-          </p>
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -1181,7 +651,7 @@ function Engineering({
       <PageHeader
         eyebrow="SYSTEM DESIGN"
         title="Engineering"
-        description="Understand the guarantees, the tradeoffs, and the boundaries of this sandbox."
+        description="Understand the delivery guarantees, operational boundaries, and security decisions."
       />
       <section className="panel architecture">
         <PanelHeading
@@ -1235,11 +705,12 @@ function Engineering({
       <div className="engineering-grid">
         <section className="panel engineering-card">
           <span className="card-label">DELIVERY SEMANTICS</span>
-          <h2>Retry safely. Apply effects once.</h2>
+          <h2>Stable identity. Honest guarantees.</h2>
           <p>
             Events can be replayed with the same identity. Acceptance keys
-            prevent duplicate events; receiver deduplication protects the
-            business effect when delivery is repeated.
+            prevent duplicate events. The Lab and reference receiver deduplicate
+            effects. External receivers must implement their own deduplication;
+            a successful HTTP response confirms acknowledgement.
           </p>
           <div className="guarantee-stats">
             <span>
@@ -1250,7 +721,7 @@ function Engineering({
             </span>
             <span>
               <strong>{formatNumber(snapshot.metrics.businessEffects)}</strong>{" "}
-              unique receiver effects
+              verified lab receiver effects
             </span>
           </div>
         </section>
@@ -1258,9 +729,11 @@ function Engineering({
           <span className="card-label">RETRY POLICY</span>
           <h2>Exponential backoff with jitter</h2>
           <p>
-            Each failed attempt schedules the next eligible delivery with ±20%
-            jitter. After {snapshot.system.maxAttempts} attempts, the event
-            enters the dead-letter state and can be replayed.
+            Retryable failures schedule the next eligible delivery with ±20%
+            jitter. Live transport retries network failures, HTTP 408, 429, and
+            5xx; other non-success responses are terminal. After{" "}
+            {snapshot.system.maxAttempts} attempts, the event enters the
+            dead-letter state and can be replayed.
           </p>
           <div className="retry-steps">
             {Array.from({ length: snapshot.system.maxAttempts }, (_, index) => (
@@ -1276,7 +749,7 @@ function Engineering({
         </section>
         <section className="panel engineering-card">
           <span className="card-label">DESIGNED BOUNDARIES</span>
-          <h2>A deliberate, bounded sandbox</h2>
+          <h2>Explicit operational boundaries</h2>
           <div className="system-limits">
             <div>
               <span>Event payload</span>
@@ -1284,7 +757,7 @@ function Engineering({
             </div>
             <div>
               <span>Receiver deadline</span>
-              <strong>250 ms</strong>
+              <strong>5 seconds live</strong>
             </div>
             <div>
               <span>Workspace capacity</span>
@@ -1300,9 +773,11 @@ function Engineering({
           <span className="card-label">SECURITY & PERSISTENCE</span>
           <h2>Signed, scoped, and recorded</h2>
           <p>
-            Every receiver envelope is signed with a workspace secret and a
-            timestamp. Workspace ownership is resolved from the authenticated
-            session. Immutable payloads and attempt records persist in SQLite.
+            Live connections use individual HMAC signing keys encrypted at rest.
+            HTTPS destinations are checked against the operator’s allowed hosts
+            and resolved public addresses before every attempt. Producer keys
+            are scoped to one connection; immutable payloads and history persist
+            in SQLite.
           </p>
           <div className="security-points">
             <span>
@@ -1341,14 +816,14 @@ function Engineering({
             ) : (
               <>
                 No fresh worker heartbeat is available. {processor.heartbeat}.
-                While visible, this page requests delivery processing every 3
-                seconds. A worker restores background processing once its
-                heartbeat is observed within 10 seconds.
+                While visible, this page can process lab deliveries every 3
+                seconds. Live events stay queued until a worker restores
+                background processing and its heartbeat is observed within 10
+                seconds.
               </>
             )}{" "}
-            Receivers remain local sandbox adapters. External receiver transport
-            and an operational retention policy are separate deployment
-            concerns.
+            Live transport runs only in the worker. Queue pause applies to both
+            live connections and lab receivers.
           </p>
         </div>
       </div>
@@ -1453,8 +928,6 @@ export default function Home() {
     error: string;
   } | null>(null);
   const [listRetry, setListRetry] = useState(0);
-  const [eventOpen, setEventOpen] = useState(false);
-  const [eventDestination, setEventDestination] = useState<string | null>(null);
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -1758,7 +1231,6 @@ export default function Home() {
         !protectedInput &&
         !target?.isContentEditable &&
         snapshot &&
-        !eventOpen &&
         !selected &&
         !recoveryDialogOpen &&
         !mobileOpen &&
@@ -1784,7 +1256,6 @@ export default function Home() {
         !(event.target instanceof HTMLInputElement) &&
         !(event.target instanceof HTMLTextAreaElement) &&
         !(event.target instanceof HTMLSelectElement) &&
-        !eventOpen &&
         !selected &&
         !recoveryDialogOpen &&
         !mobileOpen &&
@@ -1800,7 +1271,6 @@ export default function Home() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [
-    eventOpen,
     selected,
     mobileOpen,
     recoveryDialogOpen,
@@ -1813,7 +1283,6 @@ export default function Home() {
   const openCommandPalette = () => {
     if (
       !snapshot ||
-      eventOpen ||
       selected ||
       recoveryDialogOpen ||
       mobileOpen ||
@@ -1853,21 +1322,28 @@ export default function Home() {
     }
   }, [changeNavigation]);
   const go = (next: View) => {
-    changeNavigation(navigationForView(next.toLowerCase() as NavigationView));
+    changeNavigation({
+      ...navigationForView(next.toLowerCase() as NavigationView),
+      scope: urlState.scope,
+    });
     setMobileOpen(false);
   };
   const showEndpointDeliveries = (id: string) => {
-    changeNavigation({ ...navigationForView("deliveries"), endpoint: id });
+    changeNavigation({
+      ...navigationForView("deliveries"),
+      scope: urlState.scope,
+      endpoint: id,
+    });
     setMobileOpen(false);
   };
-  const closeEvent = useCallback(() => {
-    setEventOpen(false);
-    setEventDestination(null);
-  }, []);
   const closeDetail = useCallback(() => setSelected(null), [setSelected]);
   const createEvent = (id?: string) => {
-    setEventDestination(id || null);
-    setEventOpen(true);
+    changeNavigation({
+      ...navigationForView("studio"),
+      scope: urlState.scope,
+      endpoint: id || "all",
+    });
+    setMobileOpen(false);
   };
   const copy = useCallback(
     async (value: string) => {
@@ -1906,9 +1382,7 @@ export default function Home() {
     endpointFilter === "all";
   const hasModal = Boolean(
     commandPresented ||
-    (snapshot &&
-      !authRequired &&
-      (eventOpen || selected || recoveryDialogOpen)),
+    (snapshot && !authRequired && (selected || recoveryDialogOpen)),
   );
   return (
     <MotionConfig reducedMotion="user">
@@ -1955,40 +1429,39 @@ export default function Home() {
             <span className="workspace-icon">R</span>
             <div>
               <strong>Personal workspace</strong>
-              <small>Reliability sandbox</small>
+              <small>Webhook delivery platform</small>
             </div>
-            <span className="workspace-environment">LAB</span>
+            <span className="workspace-environment">2.0</span>
           </div>
           <nav aria-label="Main navigation">
-            <span className="nav-label">Workspace</span>
-            {navigation.slice(0, 6).map(({ name, icon: Icon }) => (
-              <button
-                key={name}
-                className={`nav-item ${view === name ? "active" : ""}`}
-                aria-current={view === name ? "page" : undefined}
-                onClick={() => go(name)}
-              >
-                <Icon size={19} />
-                <span>{name}</span>
-                {name === "Recovery" &&
-                  snapshot &&
-                  snapshot.metrics.dead > 0 && <b>{snapshot.metrics.dead}</b>}
-              </button>
+            {(["Operate", "Build", "Manage"] as const).map((group) => (
+              <div className="rf-navigation-group" key={group}>
+                <span className="nav-label">{group}</span>
+                {navigation
+                  .filter((item) => item.group === group)
+                  .map(({ name, label, icon: Icon }) => (
+                    <button
+                      key={name}
+                      className={`nav-item ${view === name ? "active" : ""}`}
+                      aria-current={view === name ? "page" : undefined}
+                      onClick={() => go(name)}
+                    >
+                      <Icon size={19} />
+                      <span>{label}</span>
+                      {name === "Recovery" &&
+                        snapshot &&
+                        snapshot.metrics.dead > 0 && (
+                          <b>{snapshot.metrics.dead}</b>
+                        )}
+                    </button>
+                  ))}
+              </div>
             ))}
-            <span className="nav-label second">Build</span>
-            <button
-              className={`nav-item ${view === "Engineering" ? "active" : ""}`}
-              aria-current={view === "Engineering" ? "page" : undefined}
-              onClick={() => go("Engineering")}
-            >
-              <Code2 size={19} />
-              <span>Engineering</span>
-            </button>
           </nav>
           <div className="sidebar-bottom">
             <div className="sandbox-capacity">
               <div>
-                <span>Sandbox events</span>
+                <span>Workspace events</span>
                 <b>
                   {snapshot
                     ? `${formatNumber(snapshot.metrics.total)} / ${snapshot.system.eventLimit}`
@@ -2008,7 +1481,7 @@ export default function Home() {
                   : processor?.online
                     ? `Worker ${processor.heartbeat.toLowerCase()}`
                     : processor
-                      ? "Worker offline · browser fallback"
+                      ? "Worker offline · live events queued"
                       : "Connecting to the engine…"}
               </p>
               <button onClick={() => go("Engineering")}>
@@ -2058,8 +1531,14 @@ export default function Home() {
               <Menu size={21} />
             </button>
             <div className="topbar-title">
-              <span>{view}</span>
-              <small>Reliability sandbox</small>
+              <span>
+                {view === "Endpoints"
+                  ? "Connections"
+                  : view === "Studio"
+                    ? "Integration Studio"
+                    : view}
+              </span>
+              <small>Webhook delivery platform</small>
             </div>
             <label className="global-search">
               <Search size={17} />
@@ -2094,7 +1573,6 @@ export default function Home() {
                 signingOut ||
                 commandPresented ||
                 mobileOpen ||
-                eventOpen ||
                 Boolean(selected) ||
                 recoveryDialogOpen
               }
@@ -2222,8 +1700,15 @@ export default function Home() {
                     </div>
                   )}
                   {view === "Overview" && (
-                    <Overview
+                    <ProductOverview
                       snapshot={snapshot}
+                      scope={urlState.scope}
+                      changeScope={(scope) => changeNavigation({ scope })}
+                      connections={() => go("Endpoints")}
+                      studio={() => createEvent()}
+                      deliveries={() => go("Deliveries")}
+                      recovery={() => go("Recovery")}
+                      engineering={() => go("Engineering")}
                       demo={() =>
                         act(
                           { type: "demo" },
@@ -2231,8 +1716,7 @@ export default function Home() {
                         )
                       }
                       busy={busy}
-                      go={go}
-                      select={setSelected}
+                      inspect={setSelected}
                       hrefForEvent={hrefForEvent}
                     />
                   )}
@@ -2284,7 +1768,7 @@ export default function Home() {
                         <div className="filter-tabs">
                           {[
                             { id: "all", label: "All" },
-                            { id: "delivered", label: "Delivered" },
+                            { id: "delivered", label: "Completed" },
                             { id: "retrying", label: "Retrying" },
                             { id: "dead", label: "Failed" },
                             { id: "pending", label: "Queued" },
@@ -2395,7 +1879,7 @@ export default function Home() {
                                   disabled={busy}
                                 >
                                   <Play size={15} />
-                                  Run live demo
+                                  Run lab demo
                                 </Button>
                               ) : undefined
                             }
@@ -2413,8 +1897,9 @@ export default function Home() {
                     </>
                   )}
                   {view === "Endpoints" && (
-                    <Endpoints
+                    <ConnectionsPanel
                       snapshot={snapshot}
+                      update={updateSnapshot}
                       busy={busy}
                       setMode={(endpointId, mode) =>
                         act(
@@ -2422,9 +1907,23 @@ export default function Home() {
                           `Receiver behavior changed to ${mode}.`,
                         )
                       }
-                      viewDeliveries={showEndpointDeliveries}
-                      newEvent={createEvent}
-                      openRecovery={() => go("Recovery")}
+                      inspect={showEndpointDeliveries}
+                      studio={createEvent}
+                      recovery={() => go("Recovery")}
+                      connectionError={handleRecoveryConnection}
+                      onDialogChange={setRecoveryDialogOpen}
+                    />
+                  )}
+                  {view === "Studio" && (
+                    <IntegrationStudio
+                      snapshot={snapshot}
+                      endpointId={urlState.endpoint}
+                      choose={(endpoint) => changeNavigation({ endpoint })}
+                      update={updateSnapshot}
+                      inspect={setSelected}
+                      connections={() => go("Endpoints")}
+                      connectionError={handleRecoveryConnection}
+                      keys={() => go("Security")}
                     />
                   )}
                   {view === "Recovery" && (
@@ -2453,30 +1952,38 @@ export default function Home() {
                     />
                   )}
                   {view === "Security" && (
-                    <SecurityCenter
-                      busy={busy}
-                      version={snapshot.system.now}
-                      load={loadSecurity}
-                      mutate={securityMutate}
-                      connectionError={handleRecoveryConnection}
-                      onDialogChange={setRecoveryDialogOpen}
-                      activityHref={serializeNavigation({
-                        ...navigationForView("activity"),
-                        category: "security",
-                      })}
-                      openActivity={() =>
-                        changeNavigation({
+                    <>
+                      <SecurityCenter
+                        busy={busy}
+                        version={snapshot.system.now}
+                        load={loadSecurity}
+                        mutate={securityMutate}
+                        connectionError={handleRecoveryConnection}
+                        onDialogChange={setRecoveryDialogOpen}
+                        activityHref={serializeNavigation({
                           ...navigationForView("activity"),
                           category: "security",
-                        })
-                      }
-                    />
+                        })}
+                        openActivity={() =>
+                          changeNavigation({
+                            ...navigationForView("activity"),
+                            category: "security",
+                          })
+                        }
+                      />
+                      <ProducerKeyPanel
+                        snapshot={snapshot}
+                        connectionError={handleRecoveryConnection}
+                        onDialogChange={setRecoveryDialogOpen}
+                        connections={() => go("Endpoints")}
+                      />
+                    </>
                   )}
                   {view === "Engineering" && (
                     <Engineering snapshot={snapshot} copy={copy} />
                   )}
                   <footer className="workspace-footer">
-                    <span>RelayForge · Reliability sandbox</span>
+                    <span>RelayForge · Webhook delivery platform</span>
                     <span title={processor?.description}>
                       <i className="live-dot" />
                       {connectionError
@@ -2485,7 +1992,7 @@ export default function Home() {
                           ? "Queue paused"
                           : processor?.online
                             ? `Worker ${processor.heartbeat.toLowerCase()}`
-                            : "Worker offline · browser-driven fallback"}
+                            : "Worker offline · live events queued"}
                     </span>
                   </footer>
                 </motion.div>
@@ -2504,18 +2011,6 @@ export default function Home() {
           )}
         </AnimatePresence>
         <AnimatePresence>
-          {eventOpen && snapshot && !authRequired && (
-            <EventForm
-              key={eventDestination || "event"}
-              endpoints={snapshot.endpoints.filter(
-                (endpoint) => endpoint.purpose === "standard",
-              )}
-              initialEndpointId={eventDestination}
-              onClose={closeEvent}
-              send={(action) => act(action)}
-              busy={busy}
-            />
-          )}
           {selected && snapshot && !authRequired && (
             <DeliveryDrawer
               id={selected}
@@ -2525,7 +2020,7 @@ export default function Home() {
               replay={(eventId, expectedCycle) =>
                 act(
                   { type: "replay", eventId, expectedCycle },
-                  "Original event replayed. Receiver effects are protected.",
+                  "Original event requeued. Its identity and history are preserved.",
                 )
               }
               busy={busy}

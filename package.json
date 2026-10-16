@@ -1,6 +1,6 @@
 {
   "name": "relayforge",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
@@ -18,10 +18,14 @@
     "smoke": "node scripts/smoke.mjs",
     "security:smoke": "node scripts/security-smoke.mjs",
     "request:smoke": "node scripts/request-smoke.mjs",
-    "verify:http": "node scripts/verify-http.mjs"
+    "verify:http": "node scripts/verify-http.mjs",
+    "setup:live": "node scripts/setup-live.mjs",
+    "reference:receiver": "node --experimental-strip-types scripts/reference-receiver.mjs",
+    "integration:smoke": "node scripts/integration-smoke.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
+    "ipaddr.js": "2.5.0",
     "lucide-react": "^1.31.0",
     "motion": "^12.0.0",
     "next": "16.4.0",

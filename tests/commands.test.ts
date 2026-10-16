@@ -23,6 +23,9 @@ function endpoint(id: string, name: string, description = ""): Endpoint {
     url: `/api/receiver/${id}`,
     color: "lime",
     mode: "healthy",
+    transport: "demo",
+    enabled: true,
+    revision: 1,
     purpose: "standard",
     deliveries: 0,
     delivered: 0,
@@ -36,6 +39,7 @@ function delivery(id: string, overrides: Partial<Delivery> = {}): Delivery {
     eventType: "invoice.paid",
     endpointId: "billing",
     endpointName: "Billing",
+    transport: "demo",
     status: "delivered",
     attempts: 1,
     currentCycle: 1,
@@ -82,6 +86,15 @@ test("empty search provides every known view, while exact names outrank keyword 
     "security",
   );
   assert.equal(localCommands("unmatched-phrase", []).length, 0);
+  assert.equal(
+    localCommands("integration studio", [])[0].destination.view,
+    "studio",
+  );
+  assert.equal(
+    localCommands("connections", [])[0].destination.view,
+    "endpoints",
+  );
+  assert.equal(localCommands("endpoints", [])[0].label, "Connections");
 });
 
 test("receiver searches match tenant metadata, rank exact names, and bound large workspaces", () => {

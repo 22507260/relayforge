@@ -1,5 +1,6 @@
 export type DeliveryStatus = "pending" | "delivered" | "retrying" | "dead";
 export type ReceiverMode = "healthy" | "flaky" | "failing" | "timeout";
+export type ConnectionTransport = "demo" | "https" | "reference";
 
 export interface Endpoint {
   id: string;
@@ -7,11 +8,63 @@ export interface Endpoint {
   url: string;
   description: string;
   color: string;
-  mode: ReceiverMode;
+  mode: ReceiverMode | null;
+  transport: ConnectionTransport;
+  enabled: boolean;
+  revision: number;
   purpose: "standard" | "recovery";
   deliveries: number;
   delivered: number;
   lastDurationMs: number | null;
+}
+
+export interface Connection extends Endpoint {
+  signing: {
+    keyId: string;
+    createdAt: number;
+    previousKeyId: string | null;
+    previousExpiresAt: number | null;
+  } | null;
+}
+export interface ConnectionConfiguration {
+  allowedHosts: string[];
+  referenceEnabled: boolean;
+  signingAvailable: boolean;
+}
+export interface ConnectionsResponse {
+  connections: Connection[];
+  configuration: ConnectionConfiguration;
+}
+export interface ConnectionMutationResponse {
+  connection: Connection;
+  signingSecret?: string;
+  keyId?: string;
+  snapshot: Snapshot;
+}
+export interface ProducerKey {
+  id: string;
+  name: string;
+  endpointId: string;
+  prefix: string;
+  scope: "events:write";
+  createdAt: number;
+  expiresAt: number;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
+}
+export interface ProducerKeysResponse {
+  keys: ProducerKey[];
+}
+export interface ProducerKeyCreationResponse {
+  key: ProducerKey;
+  token: string;
+}
+export interface EventAcceptance {
+  eventId: string;
+  duplicate: boolean;
+}
+export interface StudioAcceptance extends EventAcceptance {
+  snapshot: Snapshot;
 }
 
 export interface Delivery {
@@ -19,6 +72,7 @@ export interface Delivery {
   eventType: string;
   endpointId: string;
   endpointName: string;
+  transport: ConnectionTransport;
   status: DeliveryStatus;
   attempts: number;
   currentCycle: number;
@@ -33,6 +87,9 @@ export interface Delivery {
     error: string | null;
     createdAt: number;
     finishedAt: number | null;
+    failureCode: string | null;
+    signingKeyIds: string[];
+    connectionRevision: number | null;
   } | null;
 }
 
@@ -62,6 +119,9 @@ export interface Attempt {
   durationMs: number;
   createdAt: number;
   finishedAt: number | null;
+  failureCode: string | null;
+  signingKeyIds: string[];
+  connectionRevision: number | null;
 }
 
 export interface Activity {
@@ -81,22 +141,29 @@ export interface Activity {
   operationId: string | null;
 }
 
+export interface ScopeMetrics {
+  total: number;
+  delivered: number;
+  queued: number;
+  dead: number;
+  successRate: number;
+  avgLatency: number;
+  duplicatesPrevented: number;
+  businessEffects: number;
+}
+export interface ScopeSnapshot {
+  metrics: ScopeMetrics;
+  chart: { label: string; delivered: number; failed: number }[];
+  deliveries: Delivery[];
+}
 export interface Snapshot {
   user: { id: string; email: string } | null;
   endpoints: Endpoint[];
   deliveries: Delivery[];
   activity: Activity[];
   recoveryDemo: RecoveryDemo | null;
-  metrics: {
-    total: number;
-    delivered: number;
-    queued: number;
-    dead: number;
-    successRate: number;
-    avgLatency: number;
-    duplicatesPrevented: number;
-    businessEffects: number;
-  };
+  metrics: ScopeMetrics;
+  scopes: { live: ScopeSnapshot; lab: ScopeSnapshot };
   chart: { label: string; delivered: number; failed: number }[];
   system: {
     queuePaused: boolean;

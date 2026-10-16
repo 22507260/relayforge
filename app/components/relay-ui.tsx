@@ -19,7 +19,11 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
-import type { Delivery, DeliveryStatus } from "@/lib/contracts";
+import type {
+  ConnectionTransport,
+  Delivery,
+  DeliveryStatus,
+} from "@/lib/contracts";
 
 export const statusNames: Record<DeliveryStatus, string> = {
   pending: "Queued",
@@ -87,11 +91,19 @@ export function Button({
   );
 }
 
-export function StatusBadge({ status }: { status: DeliveryStatus }) {
+export function StatusBadge({
+  status,
+  transport,
+}: {
+  status: DeliveryStatus;
+  transport?: ConnectionTransport;
+}) {
   return (
     <span className={`status status-${status}`}>
       <span className="status-mark" />
-      {statusNames[status]}
+      {status === "delivered" && transport && transport !== "demo"
+        ? "Acknowledged"
+        : statusNames[status]}
     </span>
   );
 }
@@ -122,19 +134,24 @@ export function Dialog({
   title,
   onClose,
   drawer = false,
+  returnFocus,
 }: {
   children: ReactNode;
   title: string;
   onClose: () => void;
   drawer?: boolean;
+  returnFocus?: { current: HTMLElement | null };
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
+  const returnFocusRef = useRef(returnFocus);
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    const previous =
+      returnFocusRef.current?.current ??
+      (document.activeElement as HTMLElement | null);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     ref.current
@@ -166,7 +183,11 @@ export function Dialog({
     return () => {
       document.body.style.overflow = overflow;
       document.removeEventListener("keydown", handler);
-      previous?.focus();
+      // Background inert state is released by the owning screen after unmount.
+      window.requestAnimationFrame(() => {
+        if (previous?.isConnected && !previous.closest("[inert]"))
+          previous.focus();
+      });
     };
   }, []);
   return (
@@ -393,7 +414,7 @@ export function DeliveryTable({
           }
           description={
             emptyAction
-              ? "Run a demo to see acceptance, retries, and delivery in action."
+              ? "Send an event to see acceptance, retries, and delivery in action."
               : "Try a different event type, endpoint, or status filter."
           }
           search={!emptyAction}
@@ -466,7 +487,10 @@ export function DeliveryTable({
                       </span>
                     </td>
                     <td>
-                      <StatusBadge status={delivery.status} />
+                      <StatusBadge
+                        status={delivery.status}
+                        transport={delivery.transport}
+                      />
                     </td>
                     <td>
                       <span className="attempt-cell">
@@ -485,7 +509,10 @@ export function DeliveryTable({
                                 : "mono"
                             }
                           >
-                            {delivery.latestAttempt?.statusCode || "—"}
+                            {delivery.latestAttempt?.statusCode ||
+                              (delivery.latestAttempt?.failureCode
+                                ? "Network"
+                                : "—")}
                           </span>
                         </td>
                         <td className="muted mono">
@@ -538,7 +565,10 @@ export function DeliveryTable({
                     <strong>{delivery.eventType}</strong>
                     <code>{delivery.id.slice(0, 21)}</code>
                   </span>
-                  <StatusBadge status={delivery.status} />
+                  <StatusBadge
+                    status={delivery.status}
+                    transport={delivery.transport}
+                  />
                 </span>
                 <span className="card-bottom">
                   <span>{delivery.endpointName}</span>

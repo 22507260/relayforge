@@ -157,7 +157,11 @@ test("the account migration preserves old credentials, tokens and delivery histo
   );
   assert.deepEqual(
     db.connection.prepare("SELECT * FROM attempts").get(),
-    attempt,
+    Object.assign(Object.create(null), attempt, {
+      failure_code: null,
+      signing_key_ids: null,
+      connection_revision: null,
+    }),
   );
   assert.equal(
     db.connection.prepare("SELECT password_hash FROM users").get()!
