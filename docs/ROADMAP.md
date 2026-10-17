@@ -1,6 +1,6 @@
 # Roadmap
 
-RelayForge 2.0 implements live integrations: constrained HTTPS and an independent reference receiver, encrypted connection signing keys with rotation, scoped producer credentials, Integration Studio, and separate Live/Lab metrics. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
+RelayForge 2.1 adds Delivery Insights to the live integration workspace: full-history event and attempt observations, measured latency percentiles, failure breakdowns, connection comparisons, and current queue state. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
 
 ## Implemented
 
@@ -11,6 +11,7 @@ RelayForge 2.0 implements live integrations: constrained HTTPS and an independen
 - Endpoint-scoped producer API keys with expiry, revocation, transactional authorization and quotas.
 - Recovery triage, bounded bulk replay, preserved delivery cycles, a persistent Recovery Lab, and independent receiver tests for lost acknowledgements and deduplicated effects.
 - Connections, Integration Studio, account security, full audit navigation, canonical dashboard URLs, command search, and request diagnostics.
+- Delivery Insights with Live/Lab and connection filters, bounded UTC windows, twelve timeline buckets, measured p50/p95 latency, HTTP/network breakdowns, and separate all-age queue observations.
 
 ## Current boundaries
 
@@ -18,7 +19,8 @@ RelayForge 2.0 implements live integrations: constrained HTTPS and an independen
 - HTTPS destinations require an operator-configured exact hostname. Arbitrary URLs, redirects, custom ports, and private destinations are unsupported. The reference transport has one explicit fixed loopback address.
 - The application observes HTTP acknowledgement. Receiver-side idempotency is required for business effects; RelayForge makes no exactly-once network guarantee.
 - Historical Lab signing secrets remain in the application database. Live connection signing keys use encryption and an external master key; backups must preserve that original key separately.
-- Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records and scoped overviews query independent totals and recent events.
+- Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records, scoped overviews query independent totals, and Insights aggregates full persisted history within its selected window.
+- Insights describes recorded observations. Event cohorts use acceptance time and current status; attempt windows include retries and replays, including attempts on older events. Queue counts do not establish worker readiness or future delivery success.
 - Legacy attempts keep unknown cycle boundaries. Their original history is preserved without inventing a cycle number.
 - Email verification, forgotten-password recovery, a reviewed public-service abuse policy, billing, and an SLA remain outside this release.
 
@@ -30,7 +32,7 @@ Acceptance requires reproducible procedures and observed outcomes in the actual 
 
 ## Next: measured performance and storage evaluation
 
-Publish a representative workload, environment, raw results, queue lag, attempt percentiles, duplicate contention, and database cost. Evaluate a Postgres adapter only against a concrete workload; preserve tenant isolation, transactional acceptance, lease fencing, and replay history in the same behavioral suite.
+Use the recorded attempt observations as inputs to a reproducible workload, then publish its environment, raw results, queue lag, duplicate contention, and database cost. The Insights dashboard itself is not a benchmark. Evaluate a Postgres adapter only against a concrete workload; preserve tenant isolation, transactional acceptance, lease fencing, and replay history in the same behavioral suite.
 
 ## Next: lifecycle policies
 

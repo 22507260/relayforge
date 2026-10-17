@@ -1,4 +1,4 @@
-# RelayForge 2.0
+# RelayForge 2.1
 
 **A webhook delivery workspace: connect, send, inspect, recover.**
 
@@ -6,11 +6,13 @@ RelayForge delivers signed events to allowed HTTPS services or an independent lo
 
 The **Live** overview reports real integrations. The separate **Lab** view keeps controlled failure scenarios out of those metrics. HTTP success is shown as **Acknowledged**: it confirms the receiver's response, without claiming that an external application's business effect was applied exactly once.
 
-[Integration setup](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Security](docs/SECURITY.md) · [Interview guide](docs/INTERVIEW-GUIDE.md)
+**Delivery Insights** adds full-history observations for the last hour, 24 hours, or seven days: event outcomes, attempt timelines, measured p50/p95 latency, HTTP and network failure breakdowns, and the current queue. Filters keep Live, Lab, and individual connections separate.
 
-![RelayForge Live overview and integration onboarding](docs/live-preview.jpg)
+[Insights guide](docs/INSIGHTS.md) · [Integration setup](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Security](docs/SECURITY.md) · [Interview guide](docs/INTERVIEW-GUIDE.md)
 
-[Connections](docs/connections-preview.jpg) · [Integration Studio](docs/studio-preview.jpg) · [Mobile overview](docs/live-mobile-preview.jpg) · [Recovery](docs/recovery-preview.jpg) · [Security](docs/security-preview.jpg) · [Audit explorer](docs/audit-preview.jpg) · [Command palette](docs/command-preview.jpg)
+![RelayForge Delivery Insights](docs/insights-preview.jpg)
+
+[Mobile Insights](docs/insights-mobile-preview.jpg) · [Live overview](docs/live-preview.jpg) · [Connections](docs/connections-preview.jpg) · [Integration Studio](docs/studio-preview.jpg) · [Recovery](docs/recovery-preview.jpg) · [Security](docs/security-preview.jpg) · [Audit explorer](docs/audit-preview.jpg) · [Command palette](docs/command-preview.jpg)
 
 ## What you can do
 
@@ -18,6 +20,7 @@ The **Live** overview reports real integrations. The separate **Lab** view keeps
 - Compose JSON in **Integration Studio**, use an idempotency key, and follow the event from acceptance through each recorded attempt.
 - Create a producer API key scoped to one connection. Tokens are revealed once, expire within 90 days, and can be revoked.
 - Inspect HTTP responses, network failure categories, measured durations, signing key IDs, connection revisions, and retry schedules.
+- Explore **Delivery Insights** across complete stored history. Compare event outcomes with repeated attempts, examine measured latency and failure categories, and open a connection's delivery history.
 - Recover dead deliveries individually or replay up to 20 reviewed selections. Replay retains the event ID, payload, idempotency key, and earlier cycles.
 - Practice the persistent **Recovery Lab**: four failed attempts, repair, replay, then a successful delivery with one verified lab effect.
 - Search complete delivery and audit history, inspect sessions, and manage account security. **Ctrl/Cmd + K** opens the command palette.
@@ -94,6 +97,7 @@ The response is `202 {"eventId":"…","duplicate":false}`. Repeating the same co
 | Receiver effects   | Lab and independent reference receiver deduplicate effects                     | External receivers must implement their own transactional deduplication                        |
 | Recovery           | Preserved event identity, separate cycles, transactional bulk replay           | An operator must fix the receiver; replay does not guarantee recovery                          |
 | Inspection         | Full account-owned history APIs and canonical view/filter/event URLs           | A shared link does not grant access                                                            |
+| Delivery Insights  | Windowed SQL aggregates, measured latency percentiles, and current queue state | Recorded observations; no benchmark, delivery deadline, or remote-effect guarantee             |
 
 Old attempts remain under **Legacy history** when no cycle was recorded. A stale bulk selection cannot reset a newer cycle. Eligible records are queued and skipped records are reported separately; a system write failure rolls back the operation.
 
@@ -108,35 +112,36 @@ npm run build
 npm run verify:http
 ```
 
-CI performs these checks after a clean install. `verify:http` starts the compiled web application, worker, and independent reference receiver with temporary databases, a temporary master key, and temporary receiver configuration. It runs delivery/recovery, account security, request-error, and live-integration smoke checks, then stops its own processes and removes its checked temporary directory. **Stop any local reference receiver using port 4100 before running it.** The runner does not use your application's database or secrets.
+CI performs these checks after a clean install. `verify:http` starts the compiled web application, worker, and independent reference receiver with temporary databases, a temporary master key, and temporary receiver configuration. It runs delivery/recovery, account security, request-error, live-integration, and Insights smoke checks, then stops its own processes and removes its checked temporary directory. **Stop any local reference receiver using port 4100 before running it.** The runner does not use your application's database or secrets.
 
-The direct `smoke`, `security:smoke`, and `request:smoke` scripts can inspect a loopback server using synthetic accounts and leave their records in that database. The integration smoke is intended for the guarded isolated runner. Consult [Validation](docs/VALIDATION.md) for actual dated results, screenshots, and dependency audit findings.
+The direct `smoke`, `security:smoke`, and `request:smoke` scripts can inspect a loopback server using synthetic accounts and leave their records in that database. Integration and Insights smoke checks require the guarded isolated runner. Consult [Validation](docs/VALIDATION.md) for actual dated results, screenshots, and dependency audit findings.
 
 ## Runtime and limits
 
 Build and start the web application with `npm run build` and `npm start`, then supervise `npm run worker` separately. Both processes need the same database and live configuration. Deploy behind HTTPS with writable persistent disk storage. Back up the database before migration, and protect the master key separately; a database backup alone cannot restore live signing capability.
 
-This version is a bounded portfolio application: one SQLite database, 500 accepted events per workspace, four live calls at a time per worker, a five-second total network deadline, 8 KiB response headers, and discarded response bodies. The generic snapshot includes the latest 100 deliveries; scoped overviews independently query their recent records and authoritative totals, and the delivery API pages through complete history.
+This version is a bounded portfolio application: one SQLite database, 500 accepted events per workspace, four live calls at a time per worker, a five-second total network deadline, 8 KiB response headers, and discarded response bodies. The generic snapshot includes the latest 100 deliveries; scoped overviews and Insights query the database independently, and the delivery API pages through complete history.
 
 No production availability, traffic scale, or benchmark is claimed. Recorded live durations measure an attempted request through response headers or failure; they are not proof of remote application processing time. Email verification, forgotten-password recovery, distributed abuse controls, automated retention, and high availability remain future work.
 
 ## Code map
 
-| Path                                        | Responsibility                                                                   |
-| ------------------------------------------- | -------------------------------------------------------------------------------- |
-| `app/components/`                           | Overview, Connections, Studio, Recovery, Security, audit, and command UI         |
-| `app/api/`                                  | Session management routes and the separate bearer producer API                   |
-| `lib/contracts.ts`                          | Shared request and observation types                                             |
-| `lib/navigation.ts`, `lib/commands.ts`      | Canonical URLs and bounded command destinations                                  |
-| `lib/client-api.ts`                         | Readable error decoding, request IDs, and retry metadata                         |
-| `lib/server/service.ts`                     | Acceptance, leases, cycles, lab receivers, and scoped snapshots                  |
-| `lib/server/integrations.ts`                | Connections, producer keys, quotas, and transactional producer enqueue           |
-| `lib/server/signing.ts`                     | Protected master-key loading and authenticated connection-key encryption         |
-| `lib/server/transport.ts`                   | Allowed destinations, address validation, pinned HTTP transport, deadlines       |
-| `lib/server/worker.ts`                      | Bounded processing lanes, independent heartbeat, and shutdown                    |
-| `lib/reference/receiver.ts`                 | Independent signature verification, deduplication, and ambiguous acknowledgement |
-| `lib/server/auth.ts`, `lib/server/audit.ts` | Account sessions, security controls, and complete audit history                  |
-| `db/`, `drizzle/`                           | Visible schema and checksum-tracked additive migrations                          |
-| `tests/`, `scripts/verify-http.mjs`         | Policy, database races, transport, receiver, and compiled route verification     |
+| Path                                        | Responsibility                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `app/components/`                           | Overview, Insights, Connections, Studio, Recovery, Security, audit, and command UI |
+| `app/api/`                                  | Session management routes and the separate bearer producer API                     |
+| `lib/contracts.ts`                          | Shared request and observation types                                               |
+| `lib/navigation.ts`, `lib/commands.ts`      | Canonical URLs and bounded command destinations                                    |
+| `lib/client-api.ts`                         | Readable error decoding, request IDs, and retry metadata                           |
+| `lib/server/service.ts`                     | Acceptance, leases, cycles, lab receivers, and scoped snapshots                    |
+| `lib/server/insights.ts`                    | Owned event cohorts, attempt outcomes, latency percentiles, and queue aggregates   |
+| `lib/server/integrations.ts`                | Connections, producer keys, quotas, and transactional producer enqueue             |
+| `lib/server/signing.ts`                     | Protected master-key loading and authenticated connection-key encryption           |
+| `lib/server/transport.ts`                   | Allowed destinations, address validation, pinned HTTP transport, deadlines         |
+| `lib/server/worker.ts`                      | Bounded processing lanes, independent heartbeat, and shutdown                      |
+| `lib/reference/receiver.ts`                 | Independent signature verification, deduplication, and ambiguous acknowledgement   |
+| `lib/server/auth.ts`, `lib/server/audit.ts` | Account sessions, security controls, and complete audit history                    |
+| `db/`, `drizzle/`                           | Visible schema and checksum-tracked additive migrations                            |
+| `tests/`, `scripts/verify-http.mjs`         | Policy, database races, transport, receiver, and compiled route verification       |
 
 The project uses TypeScript, React 19, Motion, Tailwind CSS, Next.js, Node.js 24, SQLite, Drizzle, and `ipaddr.js` for address classification. Runtime schemas, transactions, and ownership checks enforce boundaries beyond TypeScript's compile-time types.

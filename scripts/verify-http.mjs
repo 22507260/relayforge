@@ -179,6 +179,7 @@ try {
     "security-smoke",
     "request-smoke",
     "integration-smoke",
+    "insights-smoke",
   ]) {
     if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
       throw new Error("A verification runtime stopped before checks finished.");

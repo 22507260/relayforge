@@ -39,6 +39,13 @@ const viewCommands: {
     keywords: "events webhook history queue",
   },
   {
+    view: "insights",
+    label: "Delivery Insights",
+    detail: "Latency, failure patterns, and full-history delivery signals",
+    keywords:
+      "analytics statistics metrics latency p50 p95 performance failures http network",
+  },
+  {
     view: "recovery",
     label: "Recovery",
     detail: "Failed deliveries and the recovery guide",

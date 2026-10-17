@@ -72,6 +72,7 @@ test("empty search provides every known view, while exact names outrank keyword 
     [...views],
   );
   assert.ok(commands.every((entry) => entry.kind === "view"));
+  assert.equal(localCommands("p95", [])[0].destination.view, "insights");
   assert.equal(
     localCommands("security", [])[0].destination.view,
     "security",

@@ -156,6 +156,64 @@ export interface ScopeSnapshot {
   chart: { label: string; delivered: number; failed: number }[];
   deliveries: Delivery[];
 }
+
+export type InsightsWindow = "1h" | "24h" | "7d";
+export interface InsightsQuery {
+  window: InsightsWindow;
+  scope: "live" | "lab";
+  endpointId: string;
+}
+export interface DeliveryInsights extends InsightsQuery {
+  since: number;
+  now: number;
+  events: {
+    accepted: number;
+    acknowledged: number;
+    dead: number;
+    queued: number;
+  };
+  attempts: {
+    total: number;
+    completed: number;
+    acknowledged: number;
+    failed: number;
+    inFlight: number;
+    unmeasuredInterrupted: number;
+    measured: number;
+    p50Ms: number | null;
+    p95Ms: number | null;
+    maxMs: number | null;
+  };
+  httpStatuses: { statusCode: number | null; count: number }[];
+  failures: { category: string; count: number }[];
+  timeline: {
+    startAt: number;
+    endAt: number;
+    accepted: number;
+    acknowledged: number;
+    failed: number;
+  }[];
+  endpoints: {
+    endpointId: string;
+    name: string;
+    transport: ConnectionTransport;
+    enabled: boolean;
+    accepted: number;
+    acknowledged: number;
+    dead: number;
+    queued: number;
+    attempts: number;
+    failedAttempts: number;
+    p95Ms: number | null;
+  }[];
+  queue: {
+    total: number;
+    due: number;
+    oldestCreatedAt: number | null;
+    paused: boolean;
+    blockedDisabled: number;
+  };
+}
 export interface Snapshot {
   user: { id: string; email: string } | null;
   endpoints: Endpoint[];

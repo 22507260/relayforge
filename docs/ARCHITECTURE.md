@@ -1,6 +1,6 @@
 # Architecture
 
-RelayForge 2.0 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers.
+RelayForge 2.1 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers. Delivery Insights reads aggregates directly from stored history without advancing the queue.
 
 ## Data flow
 
@@ -29,6 +29,7 @@ The reference receiver has its own database and per-connection verification conf
 | ---------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
 | `POST /api/auth/register`, `/login`, `/logout`             | Account and session lifecycle                         | Validated credentials or session; same origin |
 | `GET /api/snapshot`                                        | Persisted observations without queue progress         | Application session                           |
+| `GET /api/insights`                                        | Windowed event/attempt aggregates and current queue   | Account-owned session; strict query filters   |
 | `GET /api/deliveries`, `/api/deliveries/:id`               | Full history, filters, and event detail               | Account-owned session                         |
 | `GET /api/connections`                                     | Connection metadata and operator capabilities         | Application session                           |
 | `POST /api/connections`                                    | Create an immutable destination and signing key       | Session, same origin, strict JSON             |
@@ -114,7 +115,21 @@ The worker publishes a heartbeat every two seconds while work is running indepen
 
 The generic snapshot keeps the latest 100 deliveries and 30 activities. **Live** and **Lab** scope summaries query their own authoritative totals, chart, and eight recent deliveries across full persisted history. The ten-minute chart groups finished attempt outcomes by UTC minute. Average duration includes measured HTTP/network outcomes and excludes unfinished or unmeasured lease interruptions. Live metrics never count controlled lab receiver effects.
 
-Dashboard URLs preserve view, scope, list filters, pagination, and inspected event ID. Live is the default overview; `scope=lab` restores the Lab view. Existing `view=endpoints` links now open Connections. The Studio connection uses `view=studio&endpoint=…`. Safe sign-in return paths and copied event links carry navigation state, not authorization. Palette event searches use the account-owned full-history API, bound results, and cancel stale searches.
+Dashboard URLs preserve view, scope, list filters, pagination, and inspected event ID. Live is the default overview; `scope=lab` restores the Lab view. Existing `view=endpoints` links now open Connections. The Studio connection uses `view=studio&endpoint=…`; Insights uses `view=insights` with optional `scope`, `window`, and `endpoint`. Safe sign-in return paths and copied event links carry navigation state, not authorization. Palette event searches use the account-owned full-history API, bound results, and cancel stale searches. Insights is also a palette destination.
+
+## Delivery Insights
+
+`InsightsService` runs account-owned SQL aggregates in one adapter transaction. It does not derive results from the snapshot's 100 deliveries, load event payloads, pump queued work, or contact receivers. The response contains bounded aggregates, connection display metadata, and twelve timeline buckets. Authentication retains the existing session lifecycle.
+
+`GET /api/insights` accepts only `scope=live|lab`, `window=1h|24h|7d`, and `endpointId=all|<owned-id>`; defaults are Live, 24 hours, and all connections. Repeated or unknown query parameters are rejected. Foreign and missing connection IDs return the same generic `404`; an owned connection outside the selected transport scope yields empty observations.
+
+Event counts select deliveries accepted in the inclusive `[since, now]` interval and report their **current** status. Attempt counts instead select attempts started in that interval, including retries and replays of events accepted earlier. They can exceed event counts, and replay can change a cohort's current acknowledged count while its earlier failed attempts remain recorded.
+
+All finished attempts contribute to `completed`: acknowledged HTTP outcomes, measured failures, and finished interruptions without a known result. Thus `total = completed + inFlight` and `completed = acknowledged + failed + unmeasuredInterrupted`. Measured samples require a finished attempt and an HTTP status or recorded failure code. Unfinished and unmeasured historical interruptions do not enter latency or outcome breakdowns. A recorded zero duration is valid; missing samples produce null percentiles. SQLite calculates p50/p95 by nearest rank, without averaging the middle values. HTTP status null remains distinct from a measured HTTP response, and failure categories expose a fixed vocabulary rather than stored error text.
+
+Twelve equal UTC timeline buckets group accepted events and attempt outcomes by their respective start times. Intermediate buckets exclude their end boundary; the final bucket includes `now`. Queue observations use **all ages** within the selected account, scope, and connection. Due counts require an enabled connection, remaining attempt budget, a due schedule, and no lease; pause is reported separately. These counts precede worker configuration, signing, and destination checks and do not establish processing readiness.
+
+See the [Insights guide](INSIGHTS.md) for interpretation, navigation examples, and measurement limits.
 
 ## Storage and operations
 

@@ -2,6 +2,7 @@
 
 import {
   ArrowRight,
+  ChartNoAxesCombined,
   Command,
   CornerDownLeft,
   FileClock,
@@ -39,6 +40,7 @@ import "./command-palette.css";
 const viewIcons = {
   overview: LayoutDashboard,
   deliveries: Webhook,
+  insights: ChartNoAxesCombined,
   recovery: Wrench,
   endpoints: Unplug,
   studio: SquareTerminal,

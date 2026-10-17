@@ -6,6 +6,7 @@ import {
   Activity as ActivityIcon,
   ArrowRight,
   Check,
+  ChartNoAxesCombined,
   ChevronDown,
   CircleHelp,
   Clock3,
@@ -78,6 +79,7 @@ import {
 import { IntegrationStudio } from "./components/integration-studio";
 import { ProducerKeyPanel } from "./components/producer-key-panel";
 import { ProductOverview } from "./components/product-overview";
+import { DeliveryInsightsPanel } from "./components/delivery-insights";
 import { api, isSessionError } from "@/lib/client-api";
 import {
   navigationForView,
@@ -90,6 +92,7 @@ import {
 type View =
   | "Overview"
   | "Deliveries"
+  | "Insights"
   | "Recovery"
   | "Endpoints"
   | "Studio"
@@ -105,6 +108,12 @@ const navigation = [
     group: "Operate",
   },
   { name: "Deliveries", label: "Deliveries", icon: Layers3, group: "Operate" },
+  {
+    name: "Insights",
+    label: "Delivery Insights",
+    icon: ChartNoAxesCombined,
+    group: "Operate",
+  },
   { name: "Recovery", label: "Recovery", icon: Wrench, group: "Operate" },
   { name: "Endpoints", label: "Connections", icon: Webhook, group: "Build" },
   { name: "Studio", label: "Integration Studio", icon: Send, group: "Build" },
@@ -1431,7 +1440,7 @@ export default function Home() {
               <strong>Personal workspace</strong>
               <small>Webhook delivery platform</small>
             </div>
-            <span className="workspace-environment">2.0</span>
+            <span className="workspace-environment">2.1</span>
           </div>
           <nav aria-label="Main navigation">
             {(["Operate", "Build", "Manage"] as const).map((group) => (
@@ -1707,6 +1716,7 @@ export default function Home() {
                       connections={() => go("Endpoints")}
                       studio={() => createEvent()}
                       deliveries={() => go("Deliveries")}
+                      insights={() => go("Insights")}
                       recovery={() => go("Recovery")}
                       engineering={() => go("Engineering")}
                       demo={() =>
@@ -1718,6 +1728,22 @@ export default function Home() {
                       busy={busy}
                       inspect={setSelected}
                       hrefForEvent={hrefForEvent}
+                    />
+                  )}
+                  {view === "Insights" && (
+                    <DeliveryInsightsPanel
+                      snapshot={snapshot}
+                      navigation={urlState}
+                      change={changeNavigation}
+                      deliveries={(endpoint, status = "all") =>
+                        changeNavigation({
+                          ...navigationForView("deliveries"),
+                          scope: urlState.scope,
+                          endpoint,
+                          status,
+                        })
+                      }
+                      connectionError={handleRecoveryConnection}
                     />
                   )}
                   {view === "Deliveries" && (

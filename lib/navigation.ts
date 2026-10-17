@@ -1,8 +1,14 @@
-import type { AuditQuery, DeliveryQuery } from "./contracts.ts";
+import type {
+  AuditQuery,
+  DeliveryQuery,
+  InsightsQuery,
+  InsightsWindow,
+} from "./contracts.ts";
 
 export const views = [
   "overview",
   "deliveries",
+  "insights",
   "recovery",
   "endpoints",
   "studio",
@@ -32,6 +38,7 @@ export const securityKinds = [
 export interface NavigationState {
   view: NavigationView;
   scope: "live" | "lab";
+  window: InsightsWindow;
   page: number;
   size: number;
   q: string;
@@ -51,6 +58,7 @@ export function navigationForView(
   return {
     view,
     scope: "live",
+    window: "24h",
     page: 1,
     size: view === "recovery" ? 10 : 20,
     q: "",
@@ -96,7 +104,12 @@ export function parseNavigation(
   const state = navigationForView(view);
   if (get("scope") === "lab") state.scope = "lab";
   state.event = identifier(get("event"));
-  if (view === "studio") state.endpoint = identifier(get("endpoint")) ?? "all";
+  if (view === "studio" || view === "insights")
+    state.endpoint = identifier(get("endpoint")) ?? "all";
+  if (view === "insights") {
+    const range = get("window");
+    if (range === "1h" || range === "7d") state.window = range;
+  }
   if (["deliveries", "recovery", "activity"].includes(view)) {
     state.page = positive(get("page"), 500, 1);
     const size = positive(
@@ -149,8 +162,13 @@ export function serializeNavigation(state: NavigationState): string {
   const params = new URLSearchParams();
   if (state.view !== "overview") params.set("view", state.view);
   if (state.scope === "lab") params.set("scope", "lab");
-  if (state.view === "studio" && state.endpoint !== "all")
+  if (
+    (state.view === "studio" || state.view === "insights") &&
+    state.endpoint !== "all"
+  )
     params.set("endpoint", state.endpoint);
+  if (state.view === "insights" && state.window !== "24h")
+    params.set("window", state.window);
   if (["deliveries", "recovery", "activity"].includes(state.view)) {
     if (state.page !== 1) params.set("page", String(state.page));
     if (state.size !== (state.view === "recovery" ? 10 : 20))
@@ -216,5 +234,13 @@ export function auditQueryFor(state: NavigationState): AuditQuery {
     operationId: state.operation,
     from: state.from,
     to: state.to,
+  };
+}
+
+export function insightsQueryFor(state: NavigationState): InsightsQuery {
+  return {
+    scope: state.scope,
+    window: state.window,
+    endpointId: state.endpoint,
   };
 }

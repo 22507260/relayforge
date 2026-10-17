@@ -1,5 +1,23 @@
 # Validation record
 
+## RelayForge 2.1 Delivery Insights — 2026-10-17
+
+The release passed lint, TypeScript, **128 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full audit retains five high findings in the development lint chain documented in [Security](SECURITY.md). No dependency or database migration was added. The web application, worker, and independent reference receiver were restarted together on the compiled release.
+
+Nine new service checks cover complete history beyond the latest-100 snapshot, Live/Lab and account isolation, identical missing/foreign connection errors, measured zero-duration samples, nearest-rank percentiles, interrupted and unfinished attempts, fixed failure categories and redaction, UTC bucket boundaries, future timestamps, retries on older events, current all-age backlog, empty windows, and a consistent read-only aggregate batch. Two new navigation checks cover canonical Insights URLs, filter round trips, safe login return paths, duplicate/invalid windows, and unrelated filter removal. Command search also resolves `p95` to Delivery Insights.
+
+`npm run verify:http` passed **all five compiled HTTP scripts** against an isolated temporary application database, web process, standalone worker, and independent receiver. The new Insights script accepted 105 Lab events while paused, demonstrated that all 105 were counted despite the 100-record snapshot, and kept a disabled Live reference event separate. It checked authentication, strict and repeated query rejection, generic cross-account errors, private-data omission, no-store responses, and stable queue/audit state across reads. After resume it observed 104 healthy deliveries and one event with four failed attempts, then repaired and replayed that same event: 105 acknowledged events, 109 total attempts, and the four original failures retained. Connection duration percentiles were compared with the recorded attempt durations.
+
+The compiled interface was checked in the existing synthetic reviewer workspace without creating additional events:
+
+- Overview's View insights action and the sidebar opened the new screen. The default 24-hour Live window correctly had no recent events. Seven days showed one accepted Live event, two acknowledged attempts, and measured p50/p95 values of 4/13 ms. These are stored observations, not a performance benchmark.
+- Connection and seven-day filters survived reload. Back and Forward restored the unfiltered and selected-connection URLs. Switching to Lab cleared the connection filter and showed its separate 38 events, 93 attempts, and 60 failures. Connection links opened complete delivery history with the selected scope and receiver, without implying an Insights time filter on that list.
+- The expanded timeline exposed twelve exact data rows. Tab moved focus to its labelled scroll region. Command search for `p95` found Delivery Insights; Escape closed the palette, released both inert backgrounds, and restored its opener.
+- At **1440 × 1000**, **800 × 900**, and **390 × 844**, the document had no horizontal overflow. Mobile metrics, controls, and connection cards stayed within the viewport. The expanded mobile table scrolled within its own 348 px region rather than widening the page. Mobile navigation Escape restored Open navigation focus. Temporary viewport overrides were reset.
+- A fresh compiled browser tab recorded no console warnings or errors. The final runtime error logs were also checked.
+
+[Desktop Insights](insights-preview.jpg) and [mobile Insights](insights-mobile-preview.jpg) capture the compiled interface. These are targeted interaction checks, not a complete accessibility or browser compatibility audit. [The Insights guide](INSIGHTS.md) defines event cohorts, attempt windows, latency samples, and queue limits.
+
 ## RelayForge 2.0 live integrations — 2026-10-16
 
 The release passed lint, TypeScript, **117 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full dependency audit still reports five high findings in the development lint dependency chain documented in [Security](SECURITY.md). These checks do not establish a production SLA or a throughput benchmark.

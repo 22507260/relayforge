@@ -33,6 +33,7 @@ export function ProductOverview({
   connections,
   studio,
   deliveries,
+  insights,
   recovery,
   engineering,
   demo,
@@ -46,6 +47,7 @@ export function ProductOverview({
   connections: () => void;
   studio: () => void;
   deliveries: () => void;
+  insights: () => void;
   recovery: () => void;
   engineering: () => void;
   demo: () => void;
@@ -106,7 +108,7 @@ export function ProductOverview({
         <div>
           <span className="rf-eyebrow">
             <i />
-            OPERATE / OVERVIEW <span className="rf-version">2.0</span>
+            OPERATE / OVERVIEW <span className="rf-version">2.1</span>
           </span>
           <h1>
             {scope === "live"
@@ -268,6 +270,9 @@ export function ProductOverview({
               <Clock3 size={13} />
               {scope === "live" ? "LIVE" : "LAB"} · UTC
             </span>
+            <Button variant="ghost" onClick={insights}>
+              View insights <ArrowRight size={13} />
+            </Button>
           </PanelHeading>
           <div className="chart-legend">
             <span>

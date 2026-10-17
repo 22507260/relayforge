@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   auditQueryFor,
   deliveryQueryFor,
+  insightsQueryFor,
   navigationForView,
   parseNavigation,
   safeReturnTo,
@@ -11,6 +12,50 @@ import {
 
 const parseUrl = (url: string) =>
   parseNavigation(new URL(url, "http://localhost:3000").search);
+
+test("insights links retain scope, connection and time window without carrying delivery mutations or audit filters", () => {
+  const state = parseNavigation(
+    "?view=insights&scope=lab&window=7d&endpoint=billing_1&status=dead&page=3&operation=op_1&event=event_1",
+  );
+  assert.deepEqual(insightsQueryFor(state), {
+    scope: "lab",
+    window: "7d",
+    endpointId: "billing_1",
+  });
+  const link = serializeNavigation(state);
+  assert.equal(
+    link,
+    "/?view=insights&scope=lab&endpoint=billing_1&window=7d&event=event_1",
+  );
+  assert.deepEqual(parseUrl(link), state);
+  assert.equal(safeReturnTo(link, "https://app.example.test"), link);
+  assert.equal(parseNavigation("?view=insights&window=1h").window, "1h");
+  assert.equal(
+    serializeNavigation(navigationForView("insights")),
+    "/?view=insights",
+  );
+});
+
+test("insights window and destination URL values canonicalize to bounded defaults", () => {
+  for (const query of [
+    "window=365d",
+    "window=1h&window=7d",
+    "window=0",
+    "window=24H",
+  ]) {
+    assert.equal(parseNavigation(`?view=insights&${query}`).window, "24h");
+  }
+  const state = parseNavigation(
+    "?view=insights&endpoint=../private&scope=lab&scope=live",
+  );
+  assert.deepEqual(insightsQueryFor(state), {
+    window: "24h",
+    scope: "live",
+    endpointId: "all",
+  });
+  assert.equal(serializeNavigation(state), "/?view=insights");
+  assert.equal(parseNavigation("?view=studio&window=7d").window, "24h");
+});
 
 test("shared delivery and audit URLs survive reload and back/forward traversal without losing detail or filters", () => {
   const delivery = parseNavigation(
