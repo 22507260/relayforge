@@ -177,6 +177,38 @@ test("heartbeat expiry and per-worker shutdown preserve other observed workers",
   assert.equal((await service.snapshot()).system.worker.activeWorkers, 0);
 });
 
+test("snapshot heartbeat observations reject future records and expire at the exact freshness boundary", async (context) => {
+  const db = new SqliteTestDatabase();
+  context.after(() => db.close());
+  let now = 1_800_000_000_000;
+  const service = new RelayService(db, "alice", () => now);
+  await service.initialize();
+  const heartbeat = db.connection.prepare(
+    "INSERT INTO worker_heartbeats(id,started_at,last_seen_at) VALUES (?,?,?)",
+  );
+  heartbeat.run("future", now + 1, now + 1);
+  let observation = (await service.snapshot()).system;
+  assert.equal(observation.worker.activeWorkers, 0);
+  assert.equal(observation.worker.lastHeartbeatAt, null);
+  assert.equal(observation.processor, "request-driven");
+  heartbeat.run(
+    "boundary",
+    now - WORKER_HEARTBEAT_TTL_MS,
+    now - WORKER_HEARTBEAT_TTL_MS,
+  );
+  observation = (await service.snapshot()).system;
+  assert.equal(observation.worker.activeWorkers, 0);
+  assert.equal(
+    observation.worker.lastHeartbeatAt,
+    now - WORKER_HEARTBEAT_TTL_MS,
+  );
+  now += 1;
+  observation = (await service.snapshot()).system;
+  assert.equal(observation.worker.activeWorkers, 1);
+  assert.equal(observation.worker.lastHeartbeatAt, now);
+  assert.equal(observation.processor, "worker");
+});
+
 test("stopping an idle run loop is idempotent before its database is closed", async (context) => {
   const db = new SqliteTestDatabase();
   let closed = false;

@@ -214,6 +214,55 @@ export interface DeliveryInsights extends InsightsQuery {
     blockedDisabled: number;
   };
 }
+export type OperationsQueueCode =
+  | "in_flight"
+  | "lease_recovery"
+  | "disabled"
+  | "budget_exhausted"
+  | "scheduled"
+  | "due"
+  | "unscheduled";
+export interface OperationsReport {
+  scope: "live" | "lab";
+  now: number;
+  worker: {
+    online: boolean;
+    activeWorkers: number;
+    lastHeartbeatAt: number | null;
+    heartbeatTtlMs: number;
+  };
+  workspace: {
+    paused: boolean;
+    acceptedEvents: number;
+    eventLimit: number;
+    remainingEvents: number;
+  };
+  queue: {
+    total: number;
+    oldestCreatedAt: number | null;
+    buckets: {
+      code: OperationsQueueCode;
+      count: number;
+      oldestCreatedAt: number | null;
+    }[];
+  };
+  connections: {
+    endpointId: string;
+    name: string;
+    transport: ConnectionTransport;
+    enabled: boolean;
+    queued: number;
+    dead: number;
+    oldestQueuedAt: number | null;
+    needsAttention: boolean;
+  }[];
+  summary: {
+    dead: number;
+    disabledConnections: number;
+    queuedLiveRequiresWorker: boolean;
+  };
+}
+
 export interface Snapshot {
   user: { id: string; email: string } | null;
   endpoints: Endpoint[];

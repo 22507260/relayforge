@@ -80,6 +80,7 @@ import { IntegrationStudio } from "./components/integration-studio";
 import { ProducerKeyPanel } from "./components/producer-key-panel";
 import { ProductOverview } from "./components/product-overview";
 import { DeliveryInsightsPanel } from "./components/delivery-insights";
+import { OperationsCenter } from "./components/operations-center";
 import { api, isSessionError } from "@/lib/client-api";
 import {
   navigationForView,
@@ -93,6 +94,7 @@ type View =
   | "Overview"
   | "Deliveries"
   | "Insights"
+  | "Operations"
   | "Recovery"
   | "Endpoints"
   | "Studio"
@@ -112,6 +114,12 @@ const navigation = [
     name: "Insights",
     label: "Delivery Insights",
     icon: ChartNoAxesCombined,
+    group: "Operate",
+  },
+  {
+    name: "Operations",
+    label: "Operations Center",
+    icon: ActivityIcon,
     group: "Operate",
   },
   { name: "Recovery", label: "Recovery", icon: Wrench, group: "Operate" },
@@ -1440,7 +1448,7 @@ export default function Home() {
               <strong>Personal workspace</strong>
               <small>Webhook delivery platform</small>
             </div>
-            <span className="workspace-environment">2.1</span>
+            <span className="workspace-environment">2.2</span>
           </div>
           <nav aria-label="Main navigation">
             {(["Operate", "Build", "Manage"] as const).map((group) => (
@@ -1741,6 +1749,29 @@ export default function Home() {
                           scope: urlState.scope,
                           endpoint,
                           status,
+                        })
+                      }
+                      connectionError={handleRecoveryConnection}
+                    />
+                  )}
+                  {view === "Operations" && (
+                    <OperationsCenter
+                      scope={urlState.scope}
+                      snapshot={snapshot}
+                      changeScope={(scope) => changeNavigation({ scope })}
+                      openConnections={() => go("Endpoints")}
+                      openDeliveries={(endpoint) =>
+                        changeNavigation({
+                          ...navigationForView("deliveries"),
+                          scope: urlState.scope,
+                          endpoint,
+                        })
+                      }
+                      openRecovery={(endpoint) =>
+                        changeNavigation({
+                          ...navigationForView("recovery"),
+                          scope: urlState.scope,
+                          endpoint,
                         })
                       }
                       connectionError={handleRecoveryConnection}

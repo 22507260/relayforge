@@ -9,6 +9,7 @@ export const views = [
   "overview",
   "deliveries",
   "insights",
+  "operations",
   "recovery",
   "endpoints",
   "studio",

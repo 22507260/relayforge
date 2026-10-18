@@ -1,6 +1,6 @@
 # Roadmap
 
-RelayForge 2.1 adds Delivery Insights to the live integration workspace: full-history event and attempt observations, measured latency percentiles, failure breakdowns, connection comparisons, and current queue state. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
+RelayForge 2.2 adds Operations Center to the live integration workspace: all-age queue classifications, worker freshness, workspace capacity, a local diagnostic download, and minimal public process/readiness probes. Delivery Insights continues to report windowed event and attempt observations. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
 
 ## Implemented
 
@@ -12,6 +12,8 @@ RelayForge 2.1 adds Delivery Insights to the live integration workspace: full-hi
 - Recovery triage, bounded bulk replay, preserved delivery cycles, a persistent Recovery Lab, and independent receiver tests for lost acknowledgements and deduplicated effects.
 - Connections, Integration Studio, account security, full audit navigation, canonical dashboard URLs, command search, and request diagnostics.
 - Delivery Insights with Live/Lab and connection filters, bounded UTC windows, twelve timeline buckets, measured p50/p95 latency, HTTP/network breakdowns, and separate all-age queue observations.
+- Operations Center with complete owned queue partitions, scoped connection attention, pause state, shared-worker freshness, owner-wide remaining event capacity, and diagnostic JSON download.
+- Minimal public liveness and database/worker readiness probes, plus a dependency-free health-check command for a supervised deployment.
 
 ## Current boundaries
 
@@ -21,12 +23,13 @@ RelayForge 2.1 adds Delivery Insights to the live integration workspace: full-hi
 - Historical Lab signing secrets remain in the application database. Live connection signing keys use encryption and an external master key; backups must preserve that original key separately.
 - Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records, scoped overviews query independent totals, and Insights aggregates full persisted history within its selected window.
 - Insights describes recorded observations. Event cohorts use acceptance time and current status; attempt windows include retries and replays, including attempts on older events. Queue counts do not establish worker readiness or future delivery success.
+- Operations explains local queue state without testing receivers or reading signing keys. Health readiness checks database access and a fresh shared worker; it can pass while a connection is disabled or misconfigured, and it requires a worker even when no Live events are queued.
 - Legacy attempts keep unknown cycle boundaries. Their original history is preserved without inventing a cycle number.
 - Email verification, forgotten-password recovery, a reviewed public-service abuse policy, billing, and an SLA remain outside this release.
 
 ## Next: deployment and recovery evidence
 
-Provide supervised web/worker deployment, documented encrypted-key and database backup/restore procedures, health checks, and alerting. Run recovery drills for process termination, storage failure, wrong or missing key configuration, and sustained receiver outages.
+Provide supervised web/worker deployment, documented encrypted-key and database backup/restore procedures, and deployment-specific alerts using the implemented public probes and account-owned observations. Run recovery drills for process termination, storage failure, wrong or missing key configuration, and sustained receiver outages. Health endpoints alone do not supply supervision, alert delivery, or restore evidence.
 
 Acceptance requires reproducible procedures and observed outcomes in the actual deployment environment.
 

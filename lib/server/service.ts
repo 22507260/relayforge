@@ -17,6 +17,7 @@ import type {
 import {
   ApiError,
   canonicalJson,
+  EVENT_LIMIT,
   hashPayload,
   LEASE_MS,
   MAX_ATTEMPTS,
@@ -119,7 +120,6 @@ type ReceiverEnvelope = {
   payload: Record<string, unknown>;
   attempt: number;
 };
-const EVENT_LIMIT = 500;
 const SNAPSHOT_LIMIT = 100;
 const id = () => crypto.randomUUID();
 
@@ -1347,8 +1347,9 @@ export class RelayService {
         this.clock() - 600_000,
       ).all<{ minute: number; delivered: number; failed: number }>(),
       this.stmt(
-        "SELECT SUM(last_seen_at > ?) AS active_workers, MAX(last_seen_at) AS last_heartbeat_at FROM worker_heartbeats",
+        "SELECT SUM(last_seen_at > ?) AS active_workers, MAX(last_seen_at) AS last_heartbeat_at FROM worker_heartbeats WHERE last_seen_at <= ?",
         now - WORKER_HEARTBEAT_TTL_MS,
+        now,
       ).first<{
         active_workers: number | null;
         last_heartbeat_at: number | null;

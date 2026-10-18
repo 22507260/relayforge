@@ -1,6 +1,6 @@
 # Architecture
 
-RelayForge 2.1 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers. Delivery Insights reads aggregates directly from stored history without advancing the queue.
+RelayForge 2.2 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers. Delivery Insights and Operations Center read observations directly from stored history without advancing the queue.
 
 ## Data flow
 
@@ -25,25 +25,28 @@ The reference receiver has its own database and per-connection verification conf
 
 ## HTTP boundaries
 
-| Route                                                      | Responsibility                                        | Authority                                     |
-| ---------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
-| `POST /api/auth/register`, `/login`, `/logout`             | Account and session lifecycle                         | Validated credentials or session; same origin |
-| `GET /api/snapshot`                                        | Persisted observations without queue progress         | Application session                           |
-| `GET /api/insights`                                        | Windowed event/attempt aggregates and current queue   | Account-owned session; strict query filters   |
-| `GET /api/deliveries`, `/api/deliveries/:id`               | Full history, filters, and event detail               | Account-owned session                         |
-| `GET /api/connections`                                     | Connection metadata and operator capabilities         | Application session                           |
-| `POST /api/connections`                                    | Create an immutable destination and signing key       | Session, same origin, strict JSON             |
-| `PATCH /api/connections/:id`                               | Enable or disable using `expectedRevision`            | Account ownership, session, same origin       |
-| `POST /api/connections/:id/rotate`                         | Rotate signing key with a revision guard              | Account ownership, session, same origin       |
-| `POST /api/connections/:id/events`                         | Studio acceptance into the persistent queue           | Account ownership, session, same origin       |
-| `GET /api/producer-keys`                                   | Public key metadata                                   | Application session                           |
-| `POST /api/producer-keys`, `DELETE /api/producer-keys/:id` | Create a scoped token or revoke it                    | Account ownership, session, same origin       |
-| `POST /api/v1/events`                                      | Producer acceptance                                   | Bearer key only; one connection per key       |
-| `POST /api/action`                                         | Lab behavior, send, replay, pause, and demo-only pump | Session, same origin, strict JSON             |
-| `POST /api/recovery/replay`                                | Up to 20 cycle-guarded dead deliveries                | Session, same origin, ownership               |
-| `GET /api/security`, `POST /api/security`                  | Session inspection, revocation, password rotation     | Session; mutations require same origin        |
-| `GET /api/audit`                                           | Complete delivery and security audit history          | Account-owned session                         |
-| `POST /api/receiver/:id`                                   | Signed controlled lab envelope                        | HMAC; demo transport only                     |
+| Route                                                      | Responsibility                                          | Authority                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------- |
+| `POST /api/auth/register`, `/login`, `/logout`             | Account and session lifecycle                           | Validated credentials or session; same origin |
+| `GET /api/snapshot`                                        | Persisted observations without queue progress           | Application session                           |
+| `GET /api/insights`                                        | Windowed event/attempt aggregates and current queue     | Account-owned session; strict query filters   |
+| `GET /api/operations`                                      | All-age queue classifications, worker, and capacity     | Account-owned session; strict scope filter    |
+| `GET /api/health/live`                                     | Web process liveness, without database access           | Public; minimal fixed response                |
+| `GET /api/health/ready`                                    | Database readability and recent shared-worker heartbeat | Public; minimal fixed response                |
+| `GET /api/deliveries`, `/api/deliveries/:id`               | Full history, filters, and event detail                 | Account-owned session                         |
+| `GET /api/connections`                                     | Connection metadata and operator capabilities           | Application session                           |
+| `POST /api/connections`                                    | Create an immutable destination and signing key         | Session, same origin, strict JSON             |
+| `PATCH /api/connections/:id`                               | Enable or disable using `expectedRevision`              | Account ownership, session, same origin       |
+| `POST /api/connections/:id/rotate`                         | Rotate signing key with a revision guard                | Account ownership, session, same origin       |
+| `POST /api/connections/:id/events`                         | Studio acceptance into the persistent queue             | Account ownership, session, same origin       |
+| `GET /api/producer-keys`                                   | Public key metadata                                     | Application session                           |
+| `POST /api/producer-keys`, `DELETE /api/producer-keys/:id` | Create a scoped token or revoke it                      | Account ownership, session, same origin       |
+| `POST /api/v1/events`                                      | Producer acceptance                                     | Bearer key only; one connection per key       |
+| `POST /api/action`                                         | Lab behavior, send, replay, pause, and demo-only pump   | Session, same origin, strict JSON             |
+| `POST /api/recovery/replay`                                | Up to 20 cycle-guarded dead deliveries                  | Session, same origin, ownership               |
+| `GET /api/security`, `POST /api/security`                  | Session inspection, revocation, password rotation       | Session; mutations require same origin        |
+| `GET /api/audit`                                           | Complete delivery and security audit history            | Account-owned session                         |
+| `POST /api/receiver/:id`                                   | Signed controlled lab envelope                          | HMAC; demo transport only                     |
 
 Session identity comes from an opaque cookie, not an owner ID or identity header submitted by the browser. The producer route has a separate bearer boundary and derives both owner and connection from its key. It cannot use a browser session as a substitute.
 
@@ -115,7 +118,7 @@ The worker publishes a heartbeat every two seconds while work is running indepen
 
 The generic snapshot keeps the latest 100 deliveries and 30 activities. **Live** and **Lab** scope summaries query their own authoritative totals, chart, and eight recent deliveries across full persisted history. The ten-minute chart groups finished attempt outcomes by UTC minute. Average duration includes measured HTTP/network outcomes and excludes unfinished or unmeasured lease interruptions. Live metrics never count controlled lab receiver effects.
 
-Dashboard URLs preserve view, scope, list filters, pagination, and inspected event ID. Live is the default overview; `scope=lab` restores the Lab view. Existing `view=endpoints` links now open Connections. The Studio connection uses `view=studio&endpoint=…`; Insights uses `view=insights` with optional `scope`, `window`, and `endpoint`. Safe sign-in return paths and copied event links carry navigation state, not authorization. Palette event searches use the account-owned full-history API, bound results, and cancel stale searches. Insights is also a palette destination.
+Dashboard URLs preserve view, scope, list filters, pagination, and inspected event ID. Live is the default overview; `scope=lab` restores the Lab view. Existing `view=endpoints` links now open Connections. The Studio connection uses `view=studio&endpoint=…`; Insights uses `view=insights` with optional `scope`, `window`, and `endpoint`; Operations uses `view=operations` with optional `scope`. Safe sign-in return paths and copied event links carry navigation state, not authorization. Palette event searches use the account-owned full-history API, bound results, and cancel stale searches. Insights and Operations are also palette destinations.
 
 ## Delivery Insights
 
@@ -131,7 +134,21 @@ Twelve equal UTC timeline buckets group accepted events and attempt outcomes by 
 
 See the [Insights guide](INSIGHTS.md) for interpretation, navigation examples, and measurement limits.
 
-## Storage and operations
+## Operations Center and public probes
+
+`GET /api/operations` accepts only a single `scope=live|lab` parameter, defaulting to Live. Unknown, empty, or repeated parameters return `400`; authentication uses the existing account session. A transactional aggregate reads all account-owned queued and dead deliveries, scoped connection metadata, the global worker heartbeat, and owner-wide accepted-event capacity. It does not use the latest 100 snapshot rows, inspect payloads or destination URLs, read signing keys, perform policy/DNS checks, create attempts, or contact receivers.
+
+Queued events are partitioned into exactly one of seven states: `in_flight`, `lease_recovery`, `disabled`, `budget_exhausted`, `scheduled`, `due`, or `unscheduled`. Lease state takes precedence, followed by disabled connection, exhausted four-attempt budget, and schedule classification. Bucket counts sum to the scoped queue total. Pause is an independent workspace overlay rather than a competing bucket, so due events remain visible while paused. A due event still needs worker and configuration checks before any delivery can begin.
+
+Connections report queued/dead totals and oldest queued acceptance time across all ages. Dead deliveries, exceptional queue classifications, and queued work behind a disabled connection, pause, or missing Live worker need attention; an empty disabled connection does not. Those observations do not diagnose remote health. Capacity counts all accepted events belonging to the account across Live and Lab, against the existing 500-event limit. Switching scope cannot create additional capacity.
+
+Worker freshness is shared deployment state: heartbeats satisfy `heartbeat > now - 10_000` and `heartbeat <= now`. The report exposes only a count, freshness, and the latest heartbeat timestamp, without worker identifiers. Its queued-live warning appears when the selected Live scope contains queued events and no worker is fresh. Lab request fallback does not change the worker observation. Downloading diagnostics saves this same response locally, including connection names and IDs; it is not an anonymous artifact.
+
+Public `GET /api/health/live` returns exactly `{"status":"alive"}` with HTTP 200 and never accesses the database. `GET /api/health/ready` tests database access and the presence of at least one fresh shared worker; it returns exactly `{"status":"ready"}` with HTTP 200 or `{"status":"not_ready"}` with HTTP 503. Failures do not expose exception details, configuration, workspace counts, or identity. Both probes disable caching and retain the server-generated request ID header. Readiness deliberately requires a worker for empty or Lab-only deployments too. It is not a receiver, network, signing-key, or delivery-success check.
+
+The dependency-free `npm run health:check -- <origin>` command calls both public endpoints and exits successfully only when liveness and readiness pass. The isolated compiled HTTP runner exercises Operations and these probes; test and deployment evidence is recorded separately in [Validation](VALIDATION.md). See the [Operations guide](OPERATIONS.md) for operator interpretation.
+
+## Storage and deployment
 
 SQLite uses WAL, foreign keys, a five-second busy timeout, and `BEGIN IMMEDIATE` transactional batches. Committed migration checksums prevent silently changing an already-applied migration. The additive live migration classifies existing endpoints as demo and preserves accounts, events, cycles, and attempts.
 

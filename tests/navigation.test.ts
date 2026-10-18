@@ -13,6 +13,20 @@ import {
 const parseUrl = (url: string) =>
   parseNavigation(new URL(url, "http://localhost:3000").search);
 
+test("operations URLs retain scope and inspected event without stale list or insight filters", () => {
+  const state = parseNavigation(
+    "?view=operations&scope=lab&endpoint=billing_1&window=7d&status=dead&page=3&event=event_1",
+  );
+  const link = serializeNavigation(state);
+  assert.equal(link, "/?view=operations&scope=lab&event=event_1");
+  assert.deepEqual(parseUrl(link), state);
+  assert.equal(safeReturnTo(link, "https://app.example.test"), link);
+  assert.equal(
+    serializeNavigation(navigationForView("operations")),
+    "/?view=operations",
+  );
+});
+
 test("insights links retain scope, connection and time window without carrying delivery mutations or audit filters", () => {
   const state = parseNavigation(
     "?view=insights&scope=lab&window=7d&endpoint=billing_1&status=dead&page=3&operation=op_1&event=event_1",

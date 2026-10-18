@@ -1,6 +1,7 @@
 import type { ApiErrorCode } from "../contracts.ts";
 
 export const MAX_ATTEMPTS = 4;
+export const EVENT_LIMIT = 500;
 export const LEASE_MS = 15_000;
 export const MAX_BODY_BYTES = 16_384;
 export const RECEIVER_TIMEOUT_MS = 250;

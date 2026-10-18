@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   ArrowRight,
   ChartNoAxesCombined,
   Command,
@@ -41,6 +42,7 @@ const viewIcons = {
   overview: LayoutDashboard,
   deliveries: Webhook,
   insights: ChartNoAxesCombined,
+  operations: Activity,
   recovery: Wrench,
   endpoints: Unplug,
   studio: SquareTerminal,

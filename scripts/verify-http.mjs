@@ -180,6 +180,8 @@ try {
     "request-smoke",
     "integration-smoke",
     "insights-smoke",
+    "operations-smoke",
+    "health-check",
   ]) {
     if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
       throw new Error("A verification runtime stopped before checks finished.");

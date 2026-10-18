@@ -74,6 +74,10 @@ test("empty search provides every known view, while exact names outrank keyword 
   assert.ok(commands.every((entry) => entry.kind === "view"));
   assert.equal(localCommands("p95", [])[0].destination.view, "insights");
   assert.equal(
+    localCommands("readiness", [])[0].destination.view,
+    "operations",
+  );
+  assert.equal(
     localCommands("security", [])[0].destination.view,
     "security",
     "Security must precede the Activity security-history keyword match",

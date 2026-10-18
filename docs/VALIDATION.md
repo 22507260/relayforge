@@ -1,5 +1,24 @@
 # Validation record
 
+## RelayForge 2.2 Operations Center — 2026-10-18
+
+The release passed lint, TypeScript, **143 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full audit retains five high findings in the development lint chain documented in [Security](SECURITY.md). No database migration or dependency was added.
+
+Fifteen additional checks cover complete mutually exclusive queue classification and precedence; more than 100 records; account and Live/Lab isolation; owner-wide capacity and its lower bound; pause as a separate overlay; empty reports; stable connection triage; a consistent read-only aggregate with no payload, secret, or foreign-key inspection; storage-error propagation; minimal public liveness and readiness; database failures; exact heartbeat expiry and future timestamps; and canonical Operations navigation. The existing snapshot now uses the same future-heartbeat exclusion as Operations and readiness.
+
+`npm run verify:http` passed **six compiled HTTP smoke scripts plus the health CLI**, using temporary application/receiver databases and owned web, worker, and receiver processes. The Operations scenario checked fixed public probe bodies and no-store/request-ID headers, anonymous report rejection, strict scope parsing, account isolation, 105 paused Lab records beyond the 100-record snapshot, one disabled Live record, identical owner-wide capacity across scopes, stable audit state during reads, and eventual Lab queue drain with its failed connection identified.
+
+The compiled interface was checked with a separate synthetic reviewer account after the previous browser session expired:
+
+- A paused workspace retained 16 accepted events across scopes: 11 queued Lab events, one queued disabled reference event, and 484 remaining places. Lab's local due count stayed visible while paused; Live identified its disabled connection. Scope survived reload and browser Back/Forward.
+- Stopping the local worker left liveness at HTTP 200. After the recorded heartbeat expired, readiness returned exactly `{"status":"not_ready"}` with HTTP 503; `health:check` exited 1. The authenticated Live screen showed no current heartbeat and explained its worker requirement. Restarting the worker restored readiness to HTTP 200 and the CLI to exit 0. No signing, policy, DNS, or receiver health was inferred from that result.
+- Download report produced a JSON file through the normal browser download flow. The saved Live report matched the offline worker, one queued event, and worker-required flag; it omitted private event/credential fields. The file contains connection names and IDs, as disclosed by the interface.
+- Resume allowed the worker to drain the Lab queue. Four controlled failures remained in dead state, with Notifications first in triage. Its Open recovery action selected that connection and displayed exactly four failed deliveries.
+- At **1440 × 1000**, **800 × 900**, and **390 × 844**, the document had no horizontal overflow. Queue rows, infrastructure panels, and connection cards stayed within the viewport. Tab reached How queue states work from the report control, and Enter opened its explanation. Mobile navigation Escape returned to its opener; the hidden navigation remained inert while the main content was available. Temporary viewport overrides were reset.
+- Command search for `readiness` found Operations Center. Escape closed the palette. A fresh compiled test tab recorded no console warnings or errors; final runtime error logs were also checked.
+
+[Desktop Operations](operations-preview.jpg) shows the paused Lab queue; [mobile Operations](operations-mobile-preview.jpg) shows the disabled Live queue. These are targeted interaction checks, not a complete accessibility or browser compatibility audit. The [Operations guide](OPERATIONS.md) defines queue precedence, report privacy, and the limits of readiness. No production availability or throughput claim is made.
+
 ## RelayForge 2.1 Delivery Insights — 2026-10-17
 
 The release passed lint, TypeScript, **128 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full audit retains five high findings in the development lint chain documented in [Security](SECURITY.md). No dependency or database migration was added. The web application, worker, and independent reference receiver were restarted together on the compiled release.

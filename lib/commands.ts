@@ -46,6 +46,13 @@ const viewCommands: {
       "analytics statistics metrics latency p50 p95 performance failures http network",
   },
   {
+    view: "operations",
+    label: "Operations Center",
+    detail: "Worker readiness, queue blockers, and connection triage",
+    keywords:
+      "health diagnostics readiness liveness worker blockers capacity report operations",
+  },
+  {
     view: "recovery",
     label: "Recovery",
     detail: "Failed deliveries and the recovery guide",
