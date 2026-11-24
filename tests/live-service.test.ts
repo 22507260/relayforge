@@ -211,6 +211,141 @@ test("terminal redirects and ordinary client errors stop before using the retry 
   }
 });
 
+test("terminal transport failures stop after one attempt and recover only through explicit replay", async (context) => {
+  const f = await fixture(context);
+  for (const failureCode of [
+    "destination_blocked",
+    "response_headers_too_large",
+  ] as const) {
+    const payload = { failureCode, amount: 12 };
+    const idempotencyKey = `terminal-${failureCode}`;
+    const eventId = await f.service.send(
+      f.created.connection.id,
+      "invoice.paid",
+      payload,
+      idempotencyKey,
+    );
+    const transport = new RecordingTransport([
+      { ...result(null), failureCode },
+      result(200),
+    ]);
+    assert.equal(
+      await f.service.pump({ allowLive: true, transport }),
+      1,
+    );
+    let detail = await f.service.detail(eventId);
+    assert.equal(detail.delivery.status, "dead", failureCode);
+    assert.equal(detail.delivery.attempts, 1);
+    assert.equal(detail.delivery.nextAttemptAt, null);
+    assert.equal(detail.attempts[0].statusCode, null);
+    assert.equal(detail.attempts[0].failureCode, failureCode);
+    assert.equal(detail.attempts[0].durationMs, 47);
+    const deadActivity = (await f.service.snapshot()).activity.find(
+      (entry) => entry.eventId === eventId && entry.kind === "dead",
+    );
+    assert.match(deadActivity?.message ?? "", /terminal transport failure/);
+    assert.doesNotMatch(deadActivity?.message ?? "", /HTTP response/);
+
+    f.advance(60_000);
+    assert.equal(
+      await f.service.pump({ allowLive: true, transport }),
+      0,
+    );
+    assert.equal(transport.requests.length, 1);
+    assert.equal((await f.service.detail(eventId)).attempts.length, 1);
+
+    const replay = await f.service.replayBatch({
+      items: [{ eventId, expectedCycle: 1 }],
+    });
+    assert.equal(replay.results[0].outcome, "replayed");
+    await f.service.pump({ allowLive: true, transport });
+    detail = await f.service.detail(eventId);
+    assert.equal(detail.delivery.status, "delivered");
+    assert.equal(detail.delivery.currentCycle, 2);
+    assert.deepEqual(detail.attempts.map((attempt) => attempt.cycle), [1, 2]);
+    assert.equal(detail.attempts[0].failureCode, failureCode);
+    assert.equal(transport.requests.length, 2);
+    for (const request of transport.requests) {
+      const body = JSON.parse(request.body);
+      assert.equal(body.eventId, eventId);
+      assert.deepEqual(body.payload, payload);
+    }
+    assert.deepEqual(
+      await f.service.enqueue(
+        f.created.connection.id,
+        "invoice.paid",
+        payload,
+        idempotencyKey,
+      ),
+      { eventId, duplicate: true },
+    );
+  }
+});
+
+test("retryable network failures keep their four-attempt budget and failure observations", async (context) => {
+  const f = await fixture(context);
+  for (const failureCode of [
+    "dns_failed",
+    "timeout",
+    "tls_failed",
+    "network_error",
+  ] as const) {
+    const eventId = await f.service.send(
+      f.created.connection.id,
+      "invoice.paid",
+      { failureCode },
+    );
+    const transport = new RecordingTransport(
+      Array.from({ length: 4 }, () => ({ ...result(null), failureCode })),
+    );
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      assert.equal(
+        await f.service.pump({ allowLive: true, transport }),
+        1,
+      );
+      const detail = await f.service.detail(eventId);
+      assert.equal(detail.delivery.attempts, attempt);
+      assert.equal(detail.delivery.status, attempt < 4 ? "retrying" : "dead");
+      assert.equal(
+        detail.delivery.nextAttemptAt,
+        attempt < 4 ? f.now() + 1_000 * 2 ** (attempt - 1) : null,
+      );
+      assert.equal(detail.attempts[attempt - 1].failureCode, failureCode);
+      assert.equal(detail.attempts[attempt - 1].statusCode, null);
+      assert.equal(detail.attempts[attempt - 1].durationMs, 47);
+      f.advance(20_000);
+    }
+    assert.equal(
+      await f.service.pump({ allowLive: true, transport }),
+      0,
+    );
+    assert.equal(transport.requests.length, 4);
+  }
+});
+
+test("retryable HTTP failures still schedule a later successful attempt", async (context) => {
+  const f = await fixture(context);
+  for (const code of [408, 429, 500, 503]) {
+    const eventId = await f.service.send(
+      f.created.connection.id,
+      "invoice.paid",
+      { code },
+    );
+    const transport = new RecordingTransport([result(code), result(200)]);
+    await f.service.pump({ allowLive: true, transport });
+    let detail = await f.service.detail(eventId);
+    assert.equal(detail.delivery.status, "retrying", String(code));
+    assert.equal(detail.delivery.nextAttemptAt, f.now() + 1_000);
+    assert.equal(detail.attempts[0].statusCode, code);
+    f.advance(1_000);
+    await f.service.pump({ allowLive: true, transport });
+    detail = await f.service.detail(eventId);
+    assert.equal(detail.delivery.status, "delivered");
+    assert.equal(detail.delivery.attempts, 2);
+    assert.equal(transport.requests.length, 2);
+  }
+});
+
 test("pause, disabled transport and missing or mismatched master keys consume no attempt", async (context) => {
   const f = await fixture(context);
   const eventId = await f.service.send(

@@ -457,6 +457,52 @@ test("producer tokens are shown once, endpoint scoped and expiry, revocation and
   );
 });
 
+test("producer payload validation preserves nested JSON and rejects invalid events without durable writes", async (context) => {
+  const f = await fixture();
+  context.after(f.cleanup);
+  const created = await connected(f);
+  const invalid = [
+    { eventType: event.eventType },
+    ...[null, [], ["item"], "text", 12, true].map((payload) => ({
+      eventType: event.eventType,
+      payload,
+    })),
+    { ...event, owner: "another-workspace" },
+    { ...event, endpointId: "another-connection" },
+  ];
+  for (const value of invalid)
+    await assert.rejects(
+      enqueueProducerEvent(f.db, created.token, "invalid", value, f.now()),
+      apiStatus(400),
+    );
+  assert.equal((await f.relay.snapshot()).metrics.total, 0);
+  assert.equal((await f.service.listProducerKeys())[0].lastUsedAt, null);
+  const quota = await f.db
+    .prepare("SELECT COUNT(*) AS count FROM producer_rate_limits")
+    .first<{ count: number }>();
+  assert.equal(quota?.count, 0);
+
+  const payload = {
+    "invoice-id": "inv_42",
+    optional: null,
+    paid: true,
+    items: [{ quantity: 2, price: 12.5 }, "note", false],
+    attributes: { "0": "zero", "": "empty-key", nested: { amount: 25 } },
+  };
+  const accepted = await enqueueProducerEvent(
+    f.db,
+    created.token,
+    "nested-payload",
+    { eventType: event.eventType, payload },
+    f.now(),
+  );
+  assert.equal(accepted.duplicate, false);
+  const detail = await f.relay.detail(accepted.eventId);
+  assert.deepEqual(JSON.parse(detail.delivery.payload), payload);
+  assert.equal(detail.delivery.endpointId, created.connection.id);
+  assert.equal(detail.delivery.status, "pending");
+});
+
 test("producer idempotency preserves the original event and rejects changed payloads atomically", async (context) => {
   const f = await fixture();
   context.after(f.cleanup);

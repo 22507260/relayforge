@@ -1,5 +1,26 @@
 # Validation record
 
+## RelayForge 2.3 database recovery and delivery policy — 2026-11-24
+
+Validated locally on Windows with Node.js 24.21.0 and npm 11.19.0. Lint, TypeScript, **157 tests with zero failures**, the production build, and the production dependency audit passed. The full dependency audit also reported **zero findings**, including development dependencies. No database migration was added.
+
+The update pins Next.js and its ESLint configuration to 16.4.6, and Zod to 4.6.7. The compatible TypeScript ESLint dependency chain was updated to 8.74.0. The initial current audit found affected Next.js/Zod runtime versions and then a development-only minimatch chain; the final audits above were run after the updates. Zod 4 record schemas and transformed pagination defaults were adapted without weakening JSON object validation, ownership boundaries, or durable acceptance.
+
+The new terminal-transport regression failed against the previous service: a blocked destination incorrectly remained retrying. It now becomes dead after one attempt, as does an oversized response-header failure, with the actual null HTTP status and failure observations retained. Later pumps send no additional request until explicit replay. Transient network and retryable HTTP failures retain their retry budget; replay keeps the event identity and earlier cycle history. Lab behavior remains covered by the existing suite.
+
+Nine database-maintenance scenarios checked:
+
+- Online backup of an open WAL database includes committed event, attempt, and audit state while preserving the source's main-file bytes and rows. The completed snapshot's SHA-256 matches the reported digest, and ordinary staging cleanup leaves no temporary directory.
+- Opening a restored application database retains replay history, event identity, payload idempotency, and encrypted connection keys. Missing and incorrect master keys leave the live event queued without consuming an attempt. Restoring the original key allows a controlled transport to acknowledge the next cycle; the source remains unchanged. This is a local service-level drill, not a deployed restore or external business-effect measurement.
+- An older contiguous migration prefix is checked and backed up without applying the pending migrations or creating later schema tables.
+- Missing, invalid, unrelated, foreign-key-inconsistent, and checksum-incompatible databases are rejected; incomplete migration histories are rejected too.
+- Existing output files, source/target journal sidecars, missing output directories, and hard-linked source names are refused. A competing process creating the output during backup retains its file, and unpublished staging is removed.
+- The actual CLI emits bounded metadata without stored account/secret values, honors an explicit database over the environment default, and rejects invalid arguments without a stack trace.
+
+`npm run verify:http` passed **six compiled HTTP smoke scripts, the health CLI, and the online-backup/check commands**. The compiled Next.js application, standalone worker, and independent reference receiver were running against owned temporary databases and synthetic accounts. The final online snapshot passed integrity, foreign-key, and all six applied migration checks while the web and worker remained running. The runner then stopped its processes and removed its checked temporary directory. It did not use an existing application database or master key.
+
+The interface changes only update the release badges to 2.3; no new browser/accessibility audit or screenshots are claimed. File ACL protections were exercised on Windows, while the existing POSIX branch is exercised when CI runs on Linux. These checks do not establish production power-loss durability, encrypted off-site storage, original-key recovery availability, deployment recovery objectives, or exactly-once external effects. See [Backup and restore](BACKUP-RESTORE.md) for the operator procedure and limits.
+
 ## RelayForge 2.2 Operations Center — 2026-10-18
 
 The release passed lint, TypeScript, **143 tests with zero failures**, the production build, and a production dependency audit with zero findings. The full audit retains five high findings in the development lint chain documented in [Security](SECURITY.md). No database migration or dependency was added.

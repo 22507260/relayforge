@@ -1,6 +1,6 @@
 # Architecture
 
-RelayForge 2.2 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers. Delivery Insights and Operations Center read observations directly from stored history without advancing the queue.
+RelayForge 2.3 separates producer acceptance, delivery attempts, receiver acknowledgement, and business effects. A Next.js web application and standalone Node.js worker share a durable SQLite queue. Live network requests run only in the worker; browser request fallback processes controlled lab receivers. Delivery Insights and Operations Center read observations directly from stored history without advancing the queue. Local maintenance commands back up and inspect the database outside the HTTP boundary.
 
 ## Data flow
 
@@ -151,6 +151,12 @@ The dependency-free `npm run health:check -- <origin>` command calls both public
 ## Storage and deployment
 
 SQLite uses WAL, foreign keys, a five-second busy timeout, and `BEGIN IMMEDIATE` transactional batches. Committed migration checksums prevent silently changing an already-applied migration. The additive live migration classifies existing endpoints as demo and preserves accounts, events, cycles, and attempts.
+
+`scripts/database-maintenance.mjs` implements `npm run db:backup -- --output <new.sqlite>` and `npm run db:check -- --database <existing.sqlite>`. Both open an existing source through SQLite's read-only interface rather than the migrating application adapter. Integrity and foreign-key checks run in a consistent read transaction; migration checks require an unchanged, contiguous applied prefix and report newer unapplied files as pending. Source databases with multiple hard links are refused because their alternate names can select different WAL sidecars. Checks emit bounded metadata rather than database rows and do not decrypt signing keys or test receivers.
+
+Backup uses SQLite's online backup operation to capture committed WAL state into a protected staging directory beside the requested output. The staged snapshot is checked, hashed, and flushed before publication. A same-filesystem hard link publishes the completed file without replacing an existing target; the output parent must exist and support hard links. Existing target files or sidecars are refused. Ordinary caught failures clean up staging, while forced termination or power loss can leave protected staging for operator review. There is no automatic in-place restore or database-download API.
+
+The snapshot contains sensitive application state and is not encrypted by the backup command. It excludes the original external master key, the independent receiver's database/configuration, and external business effects. Restore prepares a new working database path, preserves the original master key separately, and coordinates web/worker restarts. It must reconcile later acceptance, acknowledgement, credential revocation, and receiver-key changes. See [Backup and restore](BACKUP-RESTORE.md) for the procedure and [Validation](VALIDATION.md) for dated local evidence; a valid snapshot alone does not establish a successful deployment restore.
 
 Web and worker run separately, need the same writable persistent database and live configuration, and should be restarted together after a migration/configuration update. Back up the database before migration; preserve the protected master key separately. Graceful worker shutdown waits for current claims. Forced termination relies on lease expiry and another worker pass.
 

@@ -13,9 +13,12 @@ next-env.d.ts
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite-journal
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+.relayforge-backup-*/
 *.pem
 *-debug.log*
 .DS_Store

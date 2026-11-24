@@ -9,7 +9,7 @@ import type {
   SecurityAction,
 } from "../contracts.ts";
 
-const object = z.record(z.unknown());
+const object = z.record(z.string(), z.unknown());
 const identifier = z
   .string()
   .min(1)
@@ -91,8 +91,8 @@ const positiveInteger = (max: number) =>
     .pipe(z.number().int().max(max));
 const deliveryQuerySchema = z
   .object({
-    page: positiveInteger(500).default("1"),
-    pageSize: positiveInteger(50).default("20"),
+    page: positiveInteger(500).default(1),
+    pageSize: positiveInteger(50).default(20),
     search: z.string().trim().max(100).default(""),
     status: z
       .enum(["all", "pending", "retrying", "delivered", "dead"])
@@ -125,8 +125,8 @@ const timestamp = z
   .pipe(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
 const auditQuerySchema = z
   .object({
-    page: positiveInteger(500).default("1"),
-    pageSize: positiveInteger(50).default("20"),
+    page: positiveInteger(500).default(1),
+    pageSize: positiveInteger(50).default(20),
     search: z.string().trim().max(100).default(""),
     category: z.enum(["all", "delivery", "security"]).default("all"),
     kind: z.enum(auditKinds).default("all"),

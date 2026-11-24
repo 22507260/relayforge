@@ -234,6 +234,16 @@ test("response headers are bounded and Retry-After parsing rejects unsafe dates 
   assert.equal(isRetryableTransportResult({ ...result, statusCode: 503 }), true);
 });
 
+test("transport retry policy distinguishes transient network failures from terminal policy failures", () => {
+  const result: TransportResult = { statusCode: null, error: "failed", failureCode: null, durationMs: 1, retryAfterMs: null };
+  for (const failureCode of ["dns_failed", "timeout", "tls_failed", "network_error"] as const) {
+    assert.equal(isRetryableTransportResult({ ...result, failureCode }), true, failureCode);
+  }
+  for (const failureCode of ["destination_blocked", "response_headers_too_large", "http_rejected", null] as const) {
+    assert.equal(isRetryableTransportResult({ ...result, failureCode }), false, String(failureCode));
+  }
+});
+
 test("independent reference receiver commits one effect across a lost acknowledgement and replay", async (context) => {
   const database = new DatabaseSync(":memory:");
   context.after(() => database.close());

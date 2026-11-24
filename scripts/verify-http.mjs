@@ -174,7 +174,7 @@ try {
     "--experimental-strip-types",
     "scripts/worker.mjs",
   ]);
-  for (const script of [
+  const checks = [
     "smoke",
     "security-smoke",
     "request-smoke",
@@ -182,10 +182,34 @@ try {
     "insights-smoke",
     "operations-smoke",
     "health-check",
-  ]) {
+  ].map((script) => ({ name: script, args: [`scripts/${script}.mjs`, url] }));
+  const backupFile = join(directory, "verified-backup.sqlite");
+  checks.push(
+    {
+      name: "database-backup",
+      args: [
+        "scripts/database-maintenance.mjs",
+        "backup",
+        "--database",
+        environment.DATABASE_PATH,
+        "--output",
+        backupFile,
+      ],
+    },
+    {
+      name: "database-check",
+      args: [
+        "scripts/database-maintenance.mjs",
+        "check",
+        "--database",
+        backupFile,
+      ],
+    },
+  );
+  for (const { name, args } of checks) {
     if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
       throw new Error("A verification runtime stopped before checks finished.");
-    const check = launch(script, [`scripts/${script}.mjs`, url]);
+    const check = launch(name, args);
     const timeout = new AbortController();
     let result;
     try {
@@ -199,14 +223,14 @@ try {
       timeout.abort();
     }
     if (result.timedOut)
-      throw new Error(`${script} exceeded its 90-second limit.`);
+      throw new Error(`${name} exceeded its 90-second limit.`);
     if (result.error || result.code !== 0)
-      throw new Error(`${script} did not pass.`);
+      throw new Error(`${name} did not pass.`);
   }
   if (stopping || hasExited(web) || hasExited(worker) || hasExited(reference))
     throw new Error("A verification runtime exited unexpectedly.");
   console.log(
-    "All compiled HTTP checks passed using an isolated temporary database.",
+    "All compiled HTTP and online backup checks passed using an isolated temporary database.",
   );
 } finally {
   stopping = true;

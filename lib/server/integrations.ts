@@ -45,7 +45,7 @@ const producerEventSchema = z
       .min(1)
       .max(64)
       .regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/),
-    payload: z.record(z.unknown()),
+    payload: z.record(z.string(), z.unknown()),
   })
   .strict();
 

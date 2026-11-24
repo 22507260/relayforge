@@ -1,4 +1,4 @@
-# RelayForge 2.2
+# RelayForge 2.3
 
 **A webhook delivery workspace: connect, send, inspect, recover.**
 
@@ -10,7 +10,9 @@ The **Live** overview reports real integrations. The separate **Lab** view keeps
 
 **Operations Center** explains the current queue across all stored ages: active and recovering leases, disabled connections, scheduled or due work, and exceptional queue states. Worker heartbeat, workspace pause, remaining capacity, and a downloadable diagnostic report bring the relevant observations together. Minimal public liveness and readiness probes support process supervision.
 
-[Operations guide](docs/OPERATIONS.md) · [Insights guide](docs/INSIGHTS.md) · [Integration setup](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Security](docs/SECURITY.md) · [Interview guide](docs/INTERVIEW-GUIDE.md)
+**Database recovery tools** create a verified online SQLite backup at a new path and check existing databases read-only. The restore guide keeps the original signing master key separate and explains recovery-point differences before restarting delivery.
+
+[Backup and restore](docs/BACKUP-RESTORE.md) · [Operations guide](docs/OPERATIONS.md) · [Insights guide](docs/INSIGHTS.md) · [Integration setup](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Security](docs/SECURITY.md) · [Interview guide](docs/INTERVIEW-GUIDE.md)
 
 ![RelayForge Operations Center](docs/operations-preview.jpg)
 
@@ -27,6 +29,7 @@ The **Live** overview reports real integrations. The separate **Lab** view keeps
 - Recover dead deliveries individually or replay up to 20 reviewed selections. Replay retains the event ID, payload, idempotency key, and earlier cycles.
 - Practice the persistent **Recovery Lab**: four failed attempts, repair, replay, then a successful delivery with one verified lab effect.
 - Search complete delivery and audit history, inspect sessions, and manage account security. **Ctrl/Cmd + K** opens the command palette.
+- Create a verified database backup without overwriting an existing file, and run read-only integrity, foreign-key, and migration-checksum checks before a recovery or upgrade.
 
 ## Run locally
 
@@ -93,7 +96,7 @@ The response is `202 {"eventId":"…","duplicate":false}`. Repeating the same co
 | Durable acceptance | Immutable event data and transactional idempotency in SQLite                                 | Acknowledgement is separate from acceptance                                                    |
 | Competing workers  | Atomic 15-second leases and token-fenced completion                                          | Lease expiry can lead to another network attempt                                               |
 | Real delivery      | Worker-only HTTPS with public address pinning; fixed local reference transport               | Exact operator allowlist; no redirects or arbitrary URLs                                       |
-| Retry policy       | Four attempts per cycle, exponential backoff with ±20% jitter                                | Live retries network failures, 408, 429, and 5xx; other unsuccessful HTTP results are terminal |
+| Retry policy       | Four attempts per cycle, exponential backoff with ±20% jitter                                | Retryable network failures, 408, 429, and 5xx retry; blocked destinations and oversized headers are terminal |
 | Secret lifecycle   | AES-256-GCM connection keys and a protected external master key                              | Losing the master key prevents decrypting existing live signing keys                           |
 | Rotation           | New and previous signatures during a 24-hour grace period                                    | Another rotation waits until the previous grace period ends                                    |
 | Producer authority | Hashed one-time tokens scoped to one enabled connection                                      | 10 active keys; 60 requests/key/minute and 240/workspace/minute                                |
@@ -102,6 +105,7 @@ The response is `202 {"eventId":"…","duplicate":false}`. Repeating the same co
 | Inspection         | Full account-owned history APIs and canonical view/filter/event URLs                         | A shared link does not grant access                                                            |
 | Delivery Insights  | Windowed SQL aggregates, measured latency percentiles, and current queue state               | Recorded observations; no benchmark, delivery deadline, or remote-effect guarantee             |
 | Operations Center  | All-age owned queue partitions, worker freshness, pause, capacity, and minimal health probes | No destination requests or signing-key validation; readiness observes the database and worker  |
+| Database backup    | SQLite online backup, verified protected staging, and publication to a new file              | Original master key and receiver state require separate recovery material; no automatic restore |
 
 Old attempts remain under **Legacy history** when no cycle was recorded. A stale bulk selection cannot reset a newer cycle. Eligible records are queued and skipped records are reported separately; a system write failure rolls back the operation.
 
@@ -116,13 +120,22 @@ npm run build
 npm run verify:http
 ```
 
-CI performs these checks after a clean install. `verify:http` starts the compiled web application, worker, and independent reference receiver with temporary databases, a temporary master key, and temporary receiver configuration. It runs six smoke checks covering delivery/recovery, account security, request errors, live integrations, Insights, and Operations, followed by the health-check CLI. It then stops its own processes and removes its checked temporary directory. **Stop any local reference receiver using port 4100 before running it.** The runner does not use your application's database or secrets.
+CI performs these checks after a clean install. `verify:http` starts the compiled web application, worker, and independent reference receiver with temporary databases, a temporary master key, and temporary receiver configuration. It runs six smoke checks covering delivery/recovery, account security, request errors, live integrations, Insights, and Operations, followed by the health-check CLI and online-backup/check commands while those processes are running. It then stops its own processes and removes its checked temporary directory. **Stop any local reference receiver using port 4100 before running it.** The runner does not use your application's database or secrets.
 
 The direct `smoke`, `security:smoke`, and `request:smoke` scripts can inspect a loopback server using synthetic accounts and leave their records in that database. Integration, Insights, and Operations smoke checks require the guarded isolated runner. Consult [Validation](docs/VALIDATION.md) for actual dated results, screenshots, and dependency audit findings.
 
 ## Runtime and limits
 
 Build and start the web application with `npm run build` and `npm start`, then supervise `npm run worker` separately. Both processes need the same database and live configuration. Deploy behind HTTPS with writable persistent disk storage. Back up the database before migration, and protect the master key separately; a database backup alone cannot restore live signing capability.
+
+Create a backup in an existing private directory outside the checkout, using a new filename, then check it without applying migrations:
+
+```sh
+npm run db:backup -- --output "../private-backups/relayforge-before-migration.sqlite"
+npm run db:check -- --database "../private-backups/relayforge-before-migration.sqlite"
+```
+
+The backup source defaults to `DATABASE_PATH` or `.data/relayforge.sqlite`; `--database <source>` selects it explicitly. Online backup includes committed WAL state. Restoring uses a new working database path, the original protected master key, and coordinated web/worker restarts. See [Backup and restore](docs/BACKUP-RESTORE.md) for version compatibility, separate receiver state, and recovery-point reconciliation. Successful checks do not establish a deployment recovery guarantee.
 
 Inspect the running web process and its shared worker with:
 
@@ -156,6 +169,7 @@ No production availability, traffic scale, or benchmark is claimed. Recorded liv
 | `lib/reference/receiver.ts`                 | Independent signature verification, deduplication, and ambiguous acknowledgement               |
 | `lib/server/auth.ts`, `lib/server/audit.ts` | Account sessions, security controls, and complete audit history                                |
 | `db/`, `drizzle/`                           | Visible schema and checksum-tracked additive migrations                                        |
+| `scripts/database-maintenance.mjs`         | Online backup, no-clobber publication, and read-only database/migration validation              |
 | `tests/`, `scripts/verify-http.mjs`         | Policy, database races, transport, receiver, and compiled route verification                   |
 
 The project uses TypeScript, React 19, Motion, Tailwind CSS, Next.js, Node.js 24, SQLite, Drizzle, and `ipaddr.js` for address classification. Runtime schemas, transactions, and ownership checks enforce boundaries beyond TypeScript's compile-time types.

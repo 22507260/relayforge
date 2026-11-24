@@ -30,7 +30,7 @@ import {
   WORKER_HEARTBEAT_TTL_MS,
 } from "./domain.ts";
 import type { SqlDatabase, SqlStatement } from "./sql.ts";
-import { LiveTransport } from "./transport.ts";
+import { isRetryableTransportResult, LiveTransport } from "./transport.ts";
 import {
   loadConnectionSigningKeys,
   signConnectionBody,
@@ -121,7 +121,7 @@ type ReceiverEnvelope = {
   attempt: number;
 };
 const SNAPSHOT_LIMIT = 100;
-const id = () => crypto.randomUUID();
+const id = (): string => crypto.randomUUID();
 
 const DELIVERY_SELECT = `SELECT d.*, e.name AS endpoint_name, e.transport AS transport,
   a.id AS latest_attempt_id, a.cycle AS latest_cycle, a.status_code AS latest_status_code,
@@ -935,6 +935,7 @@ export class RelayService {
       let failureCode: string | null = null;
       let retryAfterMs: number | null = null;
       let measuredDuration: number | null = null;
+      let retryable = endpoint.transport === "demo";
       if (endpoint.transport === "demo") {
         const signature = await signPayload(
           workspace.signing_secret,
@@ -965,18 +966,13 @@ export class RelayService {
         failureCode = response.failureCode;
         retryAfterMs = response.retryAfterMs;
         measuredDuration = response.durationMs;
+        retryable = isRetryableTransportResult(response);
       }
       const finishedAt = this.clock();
       const duration =
         measuredDuration ?? Math.max(1, Math.round(performance.now() - start));
       const successful =
         statusCode !== null && statusCode >= 200 && statusCode < 300;
-      const retryable =
-        endpoint.transport === "demo" ||
-        statusCode === null ||
-        statusCode === 408 ||
-        statusCode === 429 ||
-        statusCode >= 500;
       const status = successful
         ? "delivered"
         : retryable
@@ -993,7 +989,7 @@ export class RelayService {
       const message = successful
         ? `${endpoint.name} acknowledged the event`
         : status === "dead"
-          ? `${endpoint.name} delivery failed${retryable ? ` after ${MAX_ATTEMPTS} attempts` : " with a terminal HTTP response"}`
+          ? `${endpoint.name} delivery failed${retryable ? ` after ${MAX_ATTEMPTS} attempts` : statusCode === null ? " with a terminal transport failure" : " with a terminal HTTP response"}`
           : `${endpoint.name} ${statusCode === null ? "had a network failure" : `returned ${statusCode}`}; retry scheduled`;
       await this.db.batch([
         this.stmt(

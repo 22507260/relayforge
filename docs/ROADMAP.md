@@ -1,6 +1,6 @@
 # Roadmap
 
-RelayForge 2.2 adds Operations Center to the live integration workspace: all-age queue classifications, worker freshness, workspace capacity, a local diagnostic download, and minimal public process/readiness probes. Delivery Insights continues to report windowed event and attempt observations. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
+RelayForge 2.3 adds local database backup and read-only checks to the live integration workspace, with a [restore guide](BACKUP-RESTORE.md) for a new working path and the separately protected original master key. Operations Center continues to describe queue state and worker freshness, and Delivery Insights reports windowed event and attempt observations. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
 
 ## Implemented
 
@@ -14,6 +14,8 @@ RelayForge 2.2 adds Operations Center to the live integration workspace: all-age
 - Delivery Insights with Live/Lab and connection filters, bounded UTC windows, twelve timeline buckets, measured p50/p95 latency, HTTP/network breakdowns, and separate all-age queue observations.
 - Operations Center with complete owned queue partitions, scoped connection attention, pause state, shared-worker freshness, owner-wide remaining event capacity, and diagnostic JSON download.
 - Minimal public liveness and database/worker readiness probes, plus a dependency-free health-check command for a supervised deployment.
+- A local SQLite online-backup command that validates protected staging before publishing a new file, refuses existing destinations, and preserves committed WAL state.
+- Read-only database integrity, foreign-key, and migration-checksum checks, plus an operator restore procedure that preserves the original database and signing master key.
 
 ## Current boundaries
 
@@ -21,6 +23,7 @@ RelayForge 2.2 adds Operations Center to the live integration workspace: all-age
 - HTTPS destinations require an operator-configured exact hostname. Arbitrary URLs, redirects, custom ports, and private destinations are unsupported. The reference transport has one explicit fixed loopback address.
 - The application observes HTTP acknowledgement. Receiver-side idempotency is required for business effects; RelayForge makes no exactly-once network guarantee.
 - Historical Lab signing secrets remain in the application database. Live connection signing keys use encryption and an external master key; backups must preserve that original key separately.
+- Backup files contain sensitive application state and are not encrypted by the backup command. The application backup does not include the master key, independent receiver storage/configuration, or external business effects. Local validation does not establish off-site durability or a successful deployment restore.
 - Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records, scoped overviews query independent totals, and Insights aggregates full persisted history within its selected window.
 - Insights describes recorded observations. Event cohorts use acceptance time and current status; attempt windows include retries and replays, including attempts on older events. Queue counts do not establish worker readiness or future delivery success.
 - Operations explains local queue state without testing receivers or reading signing keys. Health readiness checks database access and a fresh shared worker; it can pass while a connection is disabled or misconfigured, and it requires a worker even when no Live events are queued.
@@ -29,7 +32,7 @@ RelayForge 2.2 adds Operations Center to the live integration workspace: all-age
 
 ## Next: deployment and recovery evidence
 
-Provide supervised web/worker deployment, documented encrypted-key and database backup/restore procedures, and deployment-specific alerts using the implemented public probes and account-owned observations. Run recovery drills for process termination, storage failure, wrong or missing key configuration, and sustained receiver outages. Health endpoints alone do not supply supervision, alert delivery, or restore evidence.
+Use the implemented backup/check commands and restore procedure in a supervised deployment. Preserve and recover the original protected master key separately, test encrypted backup storage/transport, and configure backup schedules, retention, and alerts. Run recovery drills for process termination, storage failure, wrong or missing key configuration, sustained receiver outages, and recovery-point reconciliation. Measure data loss and time to recovery in that environment. Health endpoints and a valid local backup alone do not supply supervision, alert delivery, or restore evidence.
 
 Acceptance requires reproducible procedures and observed outcomes in the actual deployment environment.
 
