@@ -1,6 +1,6 @@
 # Database backup and restore
 
-RelayForge 2.3 provides a local SQLite online-backup command and a read-only database check. They help preserve and inspect the application database without adding a database-download endpoint or an automatic restore action. Deployment-specific restore drills, backup storage, and recovery objectives still need observed evidence in the environment where the application runs.
+RelayForge 2.4 provides local SQLite backup/check commands and an isolated compiled-process recovery rehearsal. They help preserve and inspect the application database and exercise recovery with disposable fixtures, without adding a database-download endpoint or an automatic in-place restore action. Deployment-specific restore drills, backup storage, and recovery objectives still need observed evidence in the environment where the application runs.
 
 [Operations](OPERATIONS.md) · [Security](SECURITY.md) · [Validation](VALIDATION.md)
 
@@ -71,6 +71,29 @@ Receiver state and signing-key rotations can also have advanced after the snapsh
 
 Account passwords, sessions, producer-key expiry/revocation, and quota counters also return to the saved state. Review and revoke restored authority as appropriate before exposing the restored deployment. Reconcile missing accepted events with producers and business records rather than assuming the backup includes later activity.
 
+## Rehearse with disposable processes
+
+Run the rehearsal from a compiled checkout with Node.js 24:
+
+```sh
+npm run build
+npm run verify:recovery
+```
+
+The command accepts no custom origin or database configuration and does not attach to an existing application. It prepares a protected unique temporary directory outside the checkout, generated keys, synthetic accounts, separate source/restored application databases, and an independent reference receiver database. **Port 4100 must be free.** Stop your local reference receiver first; run this separately from `verify:http`. An occupied port is a failure rather than permission to stop another process.
+
+The scenario checks the recovery boundary in stages:
+
+1. The compiled web application and real standalone worker record an acknowledged event and its attempt history. A second event is accepted while paused, and the backup CLI captures it before delivery.
+2. The original application delivers the second event, committing one effect in the independent receiver. The original web and worker processes stop before the backup CLI creates a distinct restored working database. An event accepted after the snapshot is absent after restore.
+3. With no restored worker, web liveness remains available while readiness becomes unavailable as any saved worker heartbeat expires. The check uses actual elapsed heartbeat freshness rather than editing timestamps.
+4. Workers started with an explicitly missing key file and with an incorrect protected key still publish heartbeats, but the pending live event must gain no attempts or receiver receipts. This distinguishes worker readiness from usable signing configuration.
+5. Restarting with the original generated key permits acknowledgement of the same saved event identity. Matching producer input returns the original event and conflicting content returns `409`. The receiver database remains unchanged by the application restore, so a repeated delivery must retain one effect for that event. Saved acknowledged history, the stopped source database, and the backup snapshot are checked for preservation.
+
+These are assertions performed by the command, not a substitute for its actual result. The dated [Validation record](VALIDATION.md) records runs and outcomes. The runner stops only its owned child processes and removes its verified temporary directory on ordinary completion or caught failure. If an owned process cannot fully close within the shutdown deadline, the command fails and preserves its protected fixture rather than deleting files that might still be in use. Shutdown remains bounded even when a parent's descendant keeps a captured output pipe open. Forcibly terminating the runner can also leave fixtures requiring operator review. Successful runs do not retain an application/key backup for later use.
+
+The rehearsal's receiver evidence comes from its own retained SQLite database, not from arbitrary HTTPS services. It deliberately demonstrates that the application can rewind while an external effect remains committed. Generated key recovery in a temporary directory does not test the availability of your separately stored original key, encrypted off-site backups, power-loss/storage-failure durability, or deployment recovery-time and recovery-point objectives.
+
 ## Evidence and remaining work
 
-Consult the dated [Validation record](VALIDATION.md) for the checks actually run for this release. Local backup and checker tests can assess the commands' bounded behavior; they do not establish production durability, off-site backup availability, a recovery-time objective, or a recovery-point objective. Production scheduling, encrypted backup transport/storage, retention, alerting, original-key recovery, and restore drills remain deployment responsibilities.
+Consult the dated [Validation record](VALIDATION.md) for the checks actually run for this release. Local backup/check tests and the compiled-process rehearsal assess bounded behavior; they do not establish production durability, off-site backup availability, a recovery-time objective, or a recovery-point objective. Production scheduling, encrypted backup transport/storage, retention, alerting, original-key recovery, and restore drills remain deployment responsibilities.

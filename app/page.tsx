@@ -1448,7 +1448,7 @@ export default function Home() {
               <strong>Personal workspace</strong>
               <small>Webhook delivery platform</small>
             </div>
-            <span className="workspace-environment">2.3</span>
+            <span className="workspace-environment">2.4</span>
           </div>
           <nav aria-label="Main navigation">
             {(["Operate", "Build", "Manage"] as const).map((group) => (

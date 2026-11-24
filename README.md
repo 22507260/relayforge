@@ -1,4 +1,4 @@
-# RelayForge 2.3
+# RelayForge 2.4
 
 **A webhook delivery workspace: connect, send, inspect, recover.**
 
@@ -10,7 +10,7 @@ The **Live** overview reports real integrations. The separate **Lab** view keeps
 
 **Operations Center** explains the current queue across all stored ages: active and recovering leases, disabled connections, scheduled or due work, and exceptional queue states. Worker heartbeat, workspace pause, remaining capacity, and a downloadable diagnostic report bring the relevant observations together. Minimal public liveness and readiness probes support process supervision.
 
-**Database recovery tools** create a verified online SQLite backup at a new path and check existing databases read-only. The restore guide keeps the original signing master key separate and explains recovery-point differences before restarting delivery.
+**Database recovery tools** create a verified online SQLite backup at a new path and check existing databases read-only. An isolated recovery rehearsal restarts the compiled application against a restored database, exercises missing and incorrect master keys, and checks repeated delivery against the independent receiver's retained effects. The restore guide keeps the original signing master key separate and explains recovery-point differences before restarting delivery.
 
 [Backup and restore](docs/BACKUP-RESTORE.md) · [Operations guide](docs/OPERATIONS.md) · [Insights guide](docs/INSIGHTS.md) · [Integration setup](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Security](docs/SECURITY.md) · [Interview guide](docs/INTERVIEW-GUIDE.md)
 
@@ -30,6 +30,7 @@ The **Live** overview reports real integrations. The separate **Lab** view keeps
 - Practice the persistent **Recovery Lab**: four failed attempts, repair, replay, then a successful delivery with one verified lab effect.
 - Search complete delivery and audit history, inspect sessions, and manage account security. **Ctrl/Cmd + K** opens the command palette.
 - Create a verified database backup without overwriting an existing file, and run read-only integrity, foreign-key, and migration-checksum checks before a recovery or upgrade.
+- Run a recovery rehearsal with disposable application databases, a real worker, and an independent receiver, without selecting an existing deployment.
 
 ## Run locally
 
@@ -124,6 +125,14 @@ CI performs these checks after a clean install. `verify:http` starts the compile
 
 The direct `smoke`, `security:smoke`, and `request:smoke` scripts can inspect a loopback server using synthetic accounts and leave their records in that database. Integration, Insights, and Operations smoke checks require the guarded isolated runner. Consult [Validation](docs/VALIDATION.md) for actual dated results, screenshots, and dependency audit findings.
 
+After `npm run build`, run the separate recovery rehearsal:
+
+```sh
+npm run verify:recovery
+```
+
+It accepts no custom origin or database configuration. It creates protected temporary fixtures, starts its own compiled web application, workers, and reference receiver, backs up a pending event, and restores to a distinct working database. Its checks cover retained history and idempotency, worker-offline readiness, missing/wrong-key blocking, and repeated delivery with one retained reference-receiver effect. The source database and saved snapshot remain unchanged during restored processing. **Port 4100 must be free; run the two verification commands separately.** Ordinary shutdown stops only the runner's processes and removes its checked temporary directory. See [the rehearsal procedure](docs/BACKUP-RESTORE.md#rehearse-with-disposable-processes) for the scenario and limits. This is local process evidence, not a deployment recovery guarantee.
+
 ## Runtime and limits
 
 Build and start the web application with `npm run build` and `npm start`, then supervise `npm run worker` separately. Both processes need the same database and live configuration. Deploy behind HTTPS with writable persistent disk storage. Back up the database before migration, and protect the master key separately; a database backup alone cannot restore live signing capability.
@@ -170,6 +179,8 @@ No production availability, traffic scale, or benchmark is claimed. Recorded liv
 | `lib/server/auth.ts`, `lib/server/audit.ts` | Account sessions, security controls, and complete audit history                                |
 | `db/`, `drizzle/`                           | Visible schema and checksum-tracked additive migrations                                        |
 | `scripts/database-maintenance.mjs`         | Online backup, no-clobber publication, and read-only database/migration validation              |
+| `scripts/verification-runtime.mjs`         | Protected fixture paths, isolated runtime configuration, owned processes, and cleanup          |
+| `scripts/verify-recovery.mjs`, `scripts/recovery-scenario.mjs` | Compiled recovery rehearsal orchestration and guarded HTTP/receiver assertions              |
 | `tests/`, `scripts/verify-http.mjs`         | Policy, database races, transport, receiver, and compiled route verification                   |
 
 The project uses TypeScript, React 19, Motion, Tailwind CSS, Next.js, Node.js 24, SQLite, Drizzle, and `ipaddr.js` for address classification. Runtime schemas, transactions, and ownership checks enforce boundaries beyond TypeScript's compile-time types.

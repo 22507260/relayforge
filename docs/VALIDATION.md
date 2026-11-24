@@ -1,5 +1,33 @@
 # Validation record
 
+## RelayForge 2.4 compiled recovery rehearsal — 2026-11-24
+
+Validated locally on Windows with Node.js 24.21.0 and npm 11.19.0. Lint, TypeScript, the production build, and **165 tests with zero failures** passed. The full dependency audit reported **zero findings** across production and development packages. This release adds no dependency or database migration.
+
+`npm run verify:http` passed the existing six compiled HTTP smoke scripts, health CLI, and online-backup/check commands using the shared protected runtime. Receiver startup now pins both database environment aliases and supplies explicit fixture CLI paths. Separate runtime tests placed synthetic sentinel paths in all inherited application/key/receiver variables and checked the actual child environment and unchanged sentinel, rejected foreign and symlink-escape overrides, and permitted alternate owned restore paths. No existing application database or personal signing material was used.
+
+`npm run verify:recovery` passed against the compiled web application, real standalone workers, and the independent loopback reference receiver. Its final bounded report recorded:
+
+| Observation | Recorded result |
+| --- | --- |
+| Historical event retained | 3 original attempt records across 2 delivery cycles |
+| Snapshot-pending event after restore | Same event identity/payload; 1 acknowledged restored attempt |
+| Independent receiver requests for that event | 2 before application restore, 3 afterward |
+| Independent receiver effects for that event | 1, unchanged across restore |
+| Missing and wrong master keys | Advancing worker heartbeats, zero pending-event attempts and no new receiver receipts |
+| Restored web without a worker | Liveness available; readiness became unavailable through actual heartbeat expiry |
+| Producer idempotency | Matching input returned the original event; conflicting content returned 409 |
+| Event accepted after the snapshot | Absent from restored history |
+| Original data | Stopped source database/sidecars, snapshot/sidecars, and original generated key preserved |
+
+The original web and worker stopped before the snapshot was copied into a distinct restored database. Receiver storage was deliberately retained, so its independent receipt/effect evidence demonstrates an application rewind without rolling back the receiver's committed effect. Missing-key and wrong-key phases restarted both web and worker with explicit fixture key paths; readiness could correctly return 200 while signing remained unavailable. Windows process termination is not claimed as graceful-shutdown evidence.
+
+Eight added runtime/shutdown tests cover pinned storage aliases, path containment, owned-only process stopping and cleanup, failure/timeout redaction, bounded captured output, and a parent that exits while a descendant holds its output pipes. The latter reproduced an unbounded wait before correction. The corrected stop path fails within its deadline, releases captured streams, and continues refusing fixture deletion even after the close event arrives. The regression test explicitly terminated its known descendant and removed only its guarded test fixture afterward.
+
+Both compiled commands completed their owned-process shutdown and ordinary fixture cleanup. The recovery command prints its success report only after cleanup succeeds and is now a separate sequential CI step after `verify:http`. No custom origins or database paths are accepted. The only interface edits are the 2.4 release badges; no new browser/accessibility audit or screenshots are claimed.
+
+These are synthetic local process and storage observations. They do not establish restore in a supervised deployment, recovery of an off-site original key, encrypted backup availability, power-loss/storage-failure durability, deployment recovery objectives, or exactly-once effects at arbitrary remote HTTPS services. See [the recovery procedure and rehearsal](BACKUP-RESTORE.md).
+
 ## RelayForge 2.3 database recovery and delivery policy — 2026-11-24
 
 Validated locally on Windows with Node.js 24.21.0 and npm 11.19.0. Lint, TypeScript, **157 tests with zero failures**, the production build, and the production dependency audit passed. The full dependency audit also reported **zero findings**, including development dependencies. No database migration was added.

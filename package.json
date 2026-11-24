@@ -1,6 +1,6 @@
 {
   "name": "relayforge",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
@@ -24,7 +24,8 @@
     "reference:receiver": "node --experimental-strip-types scripts/reference-receiver.mjs",
     "integration:smoke": "node scripts/integration-smoke.mjs",
     "db:backup": "node scripts/database-maintenance.mjs backup",
-    "db:check": "node scripts/database-maintenance.mjs check"
+    "db:check": "node scripts/database-maintenance.mjs check",
+    "verify:recovery": "node scripts/verify-recovery.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

@@ -1,6 +1,6 @@
 # Roadmap
 
-RelayForge 2.3 adds local database backup and read-only checks to the live integration workspace, with a [restore guide](BACKUP-RESTORE.md) for a new working path and the separately protected original master key. Operations Center continues to describe queue state and worker freshness, and Delivery Insights reports windowed event and attempt observations. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
+RelayForge 2.4 adds an isolated compiled-process recovery rehearsal to the database backup/check tools and [restore guide](BACKUP-RESTORE.md). It exercises a new working database path, worker availability, missing/wrong master keys, and repeated delivery against retained independent-receiver state. Operations Center continues to describe queue state and worker freshness, and Delivery Insights reports windowed event and attempt observations. The [validation record](VALIDATION.md) describes the checks performed; this roadmap makes no delivery-date or production-capacity promise.
 
 ## Implemented
 
@@ -16,6 +16,8 @@ RelayForge 2.3 adds local database backup and read-only checks to the live integ
 - Minimal public liveness and database/worker readiness probes, plus a dependency-free health-check command for a supervised deployment.
 - A local SQLite online-backup command that validates protected staging before publishing a new file, refuses existing destinations, and preserves committed WAL state.
 - Read-only database integrity, foreign-key, and migration-checksum checks, plus an operator restore procedure that preserves the original database and signing master key.
+- A guarded `verify:recovery` rehearsal with the compiled web application, real worker processes, backup/restore CLI calls, a distinct restored database, and a reference receiver whose effect history survives the application restore.
+- Shared verification lifecycle handling with protected disposable fixtures, explicit receiver paths, bounded process ownership, and no caller-selected recovery origin or database.
 
 ## Current boundaries
 
@@ -24,6 +26,7 @@ RelayForge 2.3 adds local database backup and read-only checks to the live integ
 - The application observes HTTP acknowledgement. Receiver-side idempotency is required for business effects; RelayForge makes no exactly-once network guarantee.
 - Historical Lab signing secrets remain in the application database. Live connection signing keys use encryption and an external master key; backups must preserve that original key separately.
 - Backup files contain sensitive application state and are not encrypted by the backup command. The application backup does not include the master key, independent receiver storage/configuration, or external business effects. Local validation does not establish off-site durability or a successful deployment restore.
+- The recovery rehearsal uses synthetic data, generated keys, and a fixed loopback receiver. It does not recover an off-site key backup, test physical storage failure, restore an actual deployment, or establish recovery objectives. Receiver deduplication evidence applies to the retained reference database.
 - Workspaces retain a 500-event capacity. Snapshots return the latest 100 deliveries and 30 activities; history APIs paginate complete records, scoped overviews query independent totals, and Insights aggregates full persisted history within its selected window.
 - Insights describes recorded observations. Event cohorts use acceptance time and current status; attempt windows include retries and replays, including attempts on older events. Queue counts do not establish worker readiness or future delivery success.
 - Operations explains local queue state without testing receivers or reading signing keys. Health readiness checks database access and a fresh shared worker; it can pass while a connection is disabled or misconfigured, and it requires a worker even when no Live events are queued.
@@ -32,7 +35,7 @@ RelayForge 2.3 adds local database backup and read-only checks to the live integ
 
 ## Next: deployment and recovery evidence
 
-Use the implemented backup/check commands and restore procedure in a supervised deployment. Preserve and recover the original protected master key separately, test encrypted backup storage/transport, and configure backup schedules, retention, and alerts. Run recovery drills for process termination, storage failure, wrong or missing key configuration, sustained receiver outages, and recovery-point reconciliation. Measure data loss and time to recovery in that environment. Health endpoints and a valid local backup alone do not supply supervision, alert delivery, or restore evidence.
+Use the implemented backup/check commands, isolated rehearsal, and restore procedure to prepare a supervised deployment. Preserve and recover the original protected master key separately, test encrypted backup storage/transport, and configure backup schedules, retention, and alerts. Run deployment-specific recovery drills for process termination, storage failure, wrong or missing key configuration, sustained receiver outages, and recovery-point reconciliation. Measure data loss and time to recovery in that environment. Public health endpoints, a valid local backup, and the synthetic process rehearsal do not supply supervision, alert delivery, or deployment restore evidence.
 
 Acceptance requires reproducible procedures and observed outcomes in the actual deployment environment.
 

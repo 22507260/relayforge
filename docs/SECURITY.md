@@ -1,6 +1,6 @@
 # Security boundaries
 
-RelayForge 2.3 implements account isolation, scoped producer credentials, encrypted live signing keys, restricted outbound delivery, and local database recovery tools. These are application safeguards with explicit operational limits; the project does not claim production certification.
+RelayForge 2.4 implements account isolation, scoped producer credentials, encrypted live signing keys, restricted outbound delivery, and local database recovery tools. These are application safeguards with explicit operational limits; the project does not claim production certification.
 
 ## Accounts and dashboard authority
 
@@ -81,6 +81,8 @@ A backup contains sensitive account/session state, password and producer-token h
 The commands do not include the original master key, reference-receiver configuration/database, or external receiver business state. Preserve the original protected master key separately: a new key cannot decrypt existing live connection secrets. Restore uses a new working path with all web/worker processes stopped, then coordinated restarts. A snapshot can restore previously revoked authority, earlier receiver-key settings, or deliveries whose effects already occurred. Review these differences before reopening producer traffic. [Backup and restore](BACKUP-RESTORE.md) defines the procedure; database checks do not prove key decryption, receiver health, or a successful deployment restore.
 
 ## Operations and remaining limits
+
+Compiled verification uses a protected temporary directory and synthetic credentials. Both receiver-database environment aliases and explicit receiver CLI paths select owned fixtures, including when the checkout has local environment configuration. Restore phases can select only database/key paths inside that fixture. Runners do not accept custom recovery targets, attach to existing services, or stop foreign process objects. Owned startup output and HTTP probes establish that the intended processes started; child logs are bounded and withheld on failure. An incomplete shutdown fails within a deadline and preserves fixtures instead of deleting possibly active data. This rehearsal does not establish recovery of a deployed database or separately stored master key; see [Backup and restore](BACKUP-RESTORE.md).
 
 Deploy behind HTTPS with a writable persistent `DATABASE_PATH`. Keep database backups and receiver configuration private, protect the master key separately, and restore the original key alongside any application database restore. Losing the key is not repaired by generating a replacement. Restart web and worker together after migration or live policy changes.
 

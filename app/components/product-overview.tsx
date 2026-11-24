@@ -108,7 +108,7 @@ export function ProductOverview({
         <div>
           <span className="rf-eyebrow">
             <i />
-            OPERATE / OVERVIEW <span className="rf-version">2.3</span>
+            OPERATE / OVERVIEW <span className="rf-version">2.4</span>
           </span>
           <h1>
             {scope === "live"

@@ -29,3 +29,4 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm run verify:http
+      - run: npm run verify:recovery
